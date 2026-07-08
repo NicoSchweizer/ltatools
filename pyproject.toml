@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ltatools"
+version = "0.1.0"
+description = "Loading, Allan deviation, PSD and overview plotting for HighFinesse wavemeter .lta files"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "matplotlib", "allantools>=2024.6"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

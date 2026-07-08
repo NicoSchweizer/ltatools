@@ -1,0 +1,175 @@
+"""Central color scheme and unit scaling/labeling helpers for ltatools plots."""
+
+from __future__ import annotations
+
+import numpy as np
+
+COLORS = {
+    "frequency": "tab:blue",
+    "wavelength": "tab:blue",  # same visual identity as frequency
+    "power": "tab:orange",
+}
+
+_FREQUENCY_FACTORS = {
+    "THz": 1.0,
+    "GHz": 1e3,
+    "MHz": 1e6,
+    "kHz": 1e9,
+    "Hz": 1e12,
+}
+
+_POWER_FACTORS = {
+    "uW": 1.0,
+    "µW": 1.0,
+    "mW": 1e-3,
+    "W": 1e-6,
+}
+
+_QUANTITY_NAMES = {
+    "frequency": "Frequency",
+    "wavelength": "Wavelength",
+    "power": "Power",
+}
+
+
+def scale_frequency(values_THz, unit="THz"):
+    """Scale frequency values given in THz to another frequency unit.
+
+    Parameters
+    ----------
+    values_THz : array_like
+        Frequency values in THz.
+    unit : str, default "THz"
+        Target unit, one of ``{"THz", "GHz", "MHz", "kHz", "Hz"}``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Scaled frequency values.
+
+    Raises
+    ------
+    ValueError
+        If `unit` is not a recognized frequency unit.
+    """
+    if unit not in _FREQUENCY_FACTORS:
+        raise ValueError(
+            f"Unknown frequency unit {unit!r}; expected one of {sorted(_FREQUENCY_FACTORS)}"
+        )
+    return np.asarray(values_THz) * _FREQUENCY_FACTORS[unit]
+
+
+def scale_power(values_uW, unit="uW"):
+    """Scale power values given in microwatts to another power unit.
+
+    Parameters
+    ----------
+    values_uW : array_like
+        Power values in microwatts.
+    unit : str, default "uW"
+        Target unit, one of ``{"uW", "µW", "mW", "W"}``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Scaled power values.
+
+    Raises
+    ------
+    ValueError
+        If `unit` is not a recognized power unit.
+    """
+    if unit not in _POWER_FACTORS:
+        raise ValueError(
+            f"Unknown power unit {unit!r}; expected one of {sorted(_POWER_FACTORS)}"
+        )
+    return np.asarray(values_uW) * _POWER_FACTORS[unit]
+
+
+def axis_label(quantity, unit):
+    """Build an axis label for a quantity/unit pair.
+
+    Parameters
+    ----------
+    quantity : {"frequency", "wavelength", "power"}
+        Physical quantity being labeled.
+    unit : str
+        Unit string, e.g. ``"MHz"`` or ``"nm"``.
+
+    Returns
+    -------
+    str
+        Human-readable axis label, e.g. ``"Frequency (MHz)"``.
+
+    Raises
+    ------
+    ValueError
+        If `quantity` is not recognized.
+    """
+    if quantity not in _QUANTITY_NAMES:
+        raise ValueError(
+            f"Unknown quantity {quantity!r}; expected one of {sorted(_QUANTITY_NAMES)}"
+        )
+    return f"{_QUANTITY_NAMES[quantity]} ({unit})"
+
+
+def adev_label(quantity, unit):
+    """Build a y-axis label for an Allan deviation plot.
+
+    Parameters
+    ----------
+    quantity : {"frequency", "wavelength", "power"}
+        Physical quantity the deviation was computed from.
+    unit : str
+        Unit the deviation values are expressed in.
+
+    Returns
+    -------
+    str
+        Label of the form ``r"$\\sigma(\\tau)$ in {unit}"``.
+
+    Raises
+    ------
+    ValueError
+        If `quantity` is not recognized.
+    """
+    if quantity not in _QUANTITY_NAMES:
+        raise ValueError(
+            f"Unknown quantity {quantity!r}; expected one of {sorted(_QUANTITY_NAMES)}"
+        )
+    return rf"$\sigma(\tau)$ in {unit}"
+
+
+def psd_label(quantity, unit, scaling="psd"):
+    """Build a y-axis label for a power spectral density plot.
+
+    Parameters
+    ----------
+    quantity : {"frequency", "wavelength", "power"}
+        Physical quantity the spectrum was computed from.
+    unit : str
+        Unit of the underlying signal (e.g. ``"Hz"`` or ``"uW"``); the PSD
+        label appends ``²/Hz``, the ASD label appends ``/√Hz``.
+    scaling : {"psd", "asd"}, default "psd"
+        Whether to label a power spectral density or an amplitude spectral
+        density (``sqrt(PSD)``).
+
+    Returns
+    -------
+    str
+        Axis label, e.g. ``"PSD in Hz²/Hz"`` or ``"ASD in µW/√Hz"``.
+
+    Raises
+    ------
+    ValueError
+        If `quantity` or `scaling` is not recognized.
+    """
+    if quantity not in _QUANTITY_NAMES:
+        raise ValueError(
+            f"Unknown quantity {quantity!r}; expected one of {sorted(_QUANTITY_NAMES)}"
+        )
+    if scaling == "psd":
+        return rf"PSD in {unit}$^2$/Hz"
+    if scaling == "asd":
+        return rf"ASD in {unit}/$\sqrt{{\mathrm{{Hz}}}}$"
+    raise ValueError(f"Unknown scaling {scaling!r}; expected 'psd' or 'asd'")
