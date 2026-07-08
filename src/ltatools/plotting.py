@@ -29,7 +29,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -45,6 +45,13 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False):
         created. The right (power) axis is always created via ``twinx``.
     lines : bool, default False
         If True, connect data points with lines (marker ``'x-'``).
+    freq_unit : str, default "THz"
+        Target unit for the left axis when ``kind="freq"``; see
+        `scale_frequency`. Ignored when ``kind="wl"``.
+    power_unit : str, default "uW"
+        Target unit for the right (power) axis; see `scale_power`.
+    markersize : float, default 4
+        Marker size for both series.
 
     Returns
     -------
@@ -63,9 +70,12 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False):
     ax2.set_zorder(1)
     ax1.patch.set_visible(False)
 
-    power_mW = scale_power(df["power_uW"], "mW")
-    ax2.plot(df["time_s"], power_mW, fmt, color=COLORS["power"], label=axis_label("power", "mW"))
-    ax2.set_ylabel(axis_label("power", "mW"), color=COLORS["power"])
+    power_scaled = scale_power(df["power_uW"], power_unit)
+    ax2.plot(
+        df["time_s"], power_scaled, fmt, color=COLORS["power"],
+        markersize=markersize, label=axis_label("power", power_unit),
+    )
+    ax2.set_ylabel(axis_label("power", power_unit), color=COLORS["power"])
     ax2.tick_params(axis="y", labelcolor=COLORS["power"])
     ax2.margins(y=0.1)
 
@@ -73,13 +83,14 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False):
         quantity, unit, title = "wavelength", "nm", "Wavelength and Power over time"
         left_data = df["wavelength_nm"]
     elif kind == "freq":
-        quantity, unit, title = "frequency", "THz", "Frequency and Power over time"
-        left_data = df["frequency_THz"]
+        quantity, unit, title = "frequency", freq_unit, "Frequency and Power over time"
+        left_data = scale_frequency(df["frequency_THz"], freq_unit)
     else:
         raise ValueError(f"Unknown kind {kind!r}; expected 'freq' or 'wl'")
 
     ax1.plot(
-        df["time_s"], left_data, fmt, color=COLORS[quantity], label=axis_label(quantity, unit)
+        df["time_s"], left_data, fmt, color=COLORS[quantity],
+        markersize=markersize, label=axis_label(quantity, unit),
     )
     ax1.set_title(title)
     ax1.set_ylabel(axis_label(quantity, unit), color=COLORS[quantity])
@@ -96,7 +107,10 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False):
     return ax1, ax2
 
 
-def plot_adev(tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="frequency", ax=None):
+def plot_adev(
+    tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="frequency", ax=None,
+    errorbars=True, title=None,
+):
     """Log-log Allan deviation plot with error bars.
 
     Parameters
@@ -120,6 +134,11 @@ def plot_adev(tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="f
         Physical quantity `dev` represents. Determines color and scaling.
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
+    errorbars : bool, default True
+        If False, `dev_err`/`ci_bounds` are ignored and no error bars are
+        drawn.
+    title : str, optional
+        If given, set as the axes title.
 
     Returns
     -------
@@ -131,7 +150,9 @@ def plot_adev(tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="f
     scale = _quantity_scaler(quantity)
     dev_scaled = scale(dev, unit)
 
-    if ci_bounds is not None:
+    if not errorbars:
+        yerr = None
+    elif ci_bounds is not None:
         lower, upper = ci_bounds
         lower_scaled = scale(lower, unit)
         upper_scaled = scale(upper, unit)
@@ -150,6 +171,8 @@ def plot_adev(tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="f
     ax.set_xlabel(r"$\tau$ in s")
     ax.set_ylabel(adev_label(quantity, unit))
     ax.grid(True, which="both", ls="--", alpha=0.5)
+    if title is not None:
+        ax.set_title(title)
 
     return ax
 
@@ -225,6 +248,8 @@ def overview_figure(
     taus="all",
     ci=None,
     lines=False,
+    errorbars=True,
+    markersize=4,
     save=None,
 ):
     """Combined overview figure: timeseries on top, frequency and power ADEV below.
@@ -236,9 +261,10 @@ def overview_figure(
     kind : {"freq", "wl"}, default "freq"
         Quantity for the timeseries left axis.
     freq_unit : str, default "MHz"
-        Unit for the frequency ADEV panel.
+        Unit for the timeseries frequency axis (when ``kind="freq"``) and
+        the frequency ADEV panel.
     power_unit : str, default "uW"
-        Unit for the power ADEV panel.
+        Unit for the timeseries power axis and the power ADEV panel.
     taus : str or numpy.ndarray, default "all"
         Averaging times passed to ``compute_oadev``.
     ci : float, optional
@@ -247,6 +273,10 @@ def overview_figure(
         `dev_err` bars.
     lines : bool, default False
         Passed to ``plot_timeseries``.
+    errorbars : bool, default True
+        If False, no error bars are drawn on either ADEV panel.
+    markersize : float, default 4
+        Marker size for the timeseries panel; passed to ``plot_timeseries``.
     save : str or pathlib.Path, optional
         If given, the figure is saved as a 300 dpi PNG; the parent
         directory is created if it does not exist.
@@ -261,30 +291,41 @@ def overview_figure(
     gs = fig.add_gridspec(2, 2)
 
     ax_ts = fig.add_subplot(gs[0, :])
-    plot_timeseries(df, kind=kind, ax=ax_ts, lines=lines)
+    plot_timeseries(
+        df, kind=kind, ax=ax_ts, lines=lines,
+        freq_unit=freq_unit, power_unit=power_unit, markersize=markersize,
+    )
 
     ax_freq = fig.add_subplot(gs[1, 0])
     if ci is None:
         tau_f, dev_f, dev_f_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"], taus=taus)
-        plot_adev(tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq)
+        plot_adev(
+            tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
+            errorbars=errorbars, title="Frequency Allan Deviation",
+        )
     else:
         tau_f, dev_f, dev_f_err, _, bounds_f = compute_oadev(
             df["frequency_THz"], time_s=df["time_s"], taus=taus, ci=ci
         )
         plot_adev(
-            tau_f, dev_f, dev_f_err, ci_bounds=bounds_f, unit=freq_unit, quantity="frequency", ax=ax_freq
+            tau_f, dev_f, dev_f_err, ci_bounds=bounds_f, unit=freq_unit, quantity="frequency", ax=ax_freq,
+            errorbars=errorbars, title="Frequency Allan Deviation",
         )
 
     ax_power = fig.add_subplot(gs[1, 1])
     if ci is None:
         tau_p, dev_p, dev_p_err, _ = compute_oadev(df["power_uW"], time_s=df["time_s"], taus=taus)
-        plot_adev(tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power)
+        plot_adev(
+            tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
+            errorbars=errorbars, title="Power Allan Deviation",
+        )
     else:
         tau_p, dev_p, dev_p_err, _, bounds_p = compute_oadev(
             df["power_uW"], time_s=df["time_s"], taus=taus, ci=ci
         )
         plot_adev(
-            tau_p, dev_p, dev_p_err, ci_bounds=bounds_p, unit=power_unit, quantity="power", ax=ax_power
+            tau_p, dev_p, dev_p_err, ci_bounds=bounds_p, unit=power_unit, quantity="power", ax=ax_power,
+            errorbars=errorbars, title="Power Allan Deviation",
         )
 
     if save is not None:

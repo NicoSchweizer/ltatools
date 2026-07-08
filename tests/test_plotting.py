@@ -24,12 +24,28 @@ def test_plot_timeseries_freq(write_lta):
     df = _load_df(write_lta, n_points=50)
     ax1, ax2 = plot_timeseries(df, kind="freq")
     assert ax1 is not None and ax2 is not None
+    assert ax1.get_lines()[0].get_markersize() == 4
 
 
 def test_plot_timeseries_wl(write_lta):
     df = _load_df(write_lta, n_points=50)
     ax1, ax2 = plot_timeseries(df, kind="wl")
     assert ax1 is not None and ax2 is not None
+
+
+def test_plot_timeseries_units_and_markersize(write_lta):
+    df = _load_df(write_lta, n_points=50, wavelength_nm=1064.0, power_uW=500.0)
+    ax1, ax2 = plot_timeseries(df, kind="freq", freq_unit="GHz", power_unit="mW", markersize=7)
+
+    freq_line = ax1.get_lines()[0]
+    power_line = ax2.get_lines()[0]
+
+    assert freq_line.get_markersize() == 7
+    assert power_line.get_markersize() == 7
+    np.testing.assert_allclose(freq_line.get_ydata(), df["frequency_THz"] * 1e3)
+    np.testing.assert_allclose(power_line.get_ydata(), df["power_uW"] * 1e-3)
+    assert "GHz" in ax1.get_ylabel()
+    assert "mW" in ax2.get_ylabel()
 
 
 def test_plot_adev_with_and_without_error():
@@ -42,6 +58,26 @@ def test_plot_adev_with_and_without_error():
 
     assert ax_with is not None
     assert ax_without is not None
+
+
+def test_plot_adev_errorbars_false_suppresses_bars():
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+    dev_err = np.array([0.01, 0.007, 0.005])
+
+    ax_on = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", errorbars=True)
+    ax_off = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", errorbars=False)
+
+    assert len(ax_on.containers[0].lines[2]) > 0
+    assert len(ax_off.containers[0].lines[2]) == 0
+
+
+def test_plot_adev_title():
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+
+    ax = plot_adev(tau, dev, unit="MHz", quantity="frequency", title="Frequency Allan Deviation")
+    assert ax.get_title() == "Frequency Allan Deviation"
 
 
 def test_plot_adev_ci_bounds_overrides_dev_err():
@@ -68,6 +104,39 @@ def test_overview_figure_axes_count(write_lta):
     fig, axes = overview_figure(df, taus="octave")
     assert len(fig.axes) == 4
     assert len(axes) == 3
+
+
+def test_overview_figure_adev_titles(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    fig, axes = overview_figure(df, taus="octave")
+    _, ax_freq, ax_power = axes
+
+    assert ax_freq.get_title() == "Frequency Allan Deviation"
+    assert ax_power.get_title() == "Power Allan Deviation"
+
+
+def test_overview_figure_errorbars_false(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    fig, axes = overview_figure(df, taus="octave", errorbars=False)
+    _, ax_freq, ax_power = axes
+
+    assert len(ax_freq.containers[0].lines[2]) == 0
+    assert len(ax_power.containers[0].lines[2]) == 0
+
+
+def test_overview_figure_timeseries_power_unit_matches_adev_default(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    fig, axes = overview_figure(df, taus="octave")
+    ax_ts, ax_freq, ax_power = axes
+
+    # the twin (power) axis of the timeseries panel is the one remaining axes
+    ts_power_ax = next(ax for ax in fig.axes if ax not in (ax_ts, ax_freq, ax_power))
+
+    def _unit(label):
+        return "uW" in label or "µW" in label
+
+    assert _unit(ts_power_ax.get_ylabel())
+    assert _unit(ax_power.get_ylabel())
 
 
 def test_overview_figure_save_creates_missing_dir(write_lta, tmp_path):
