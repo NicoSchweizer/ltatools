@@ -62,4 +62,34 @@ Baseline: Commit `17bbb15` (Ende Runde 1).
 - [x] Manueller Smoke-Check aller 5 `kind`s über `plot()` (DataFrame-Input,
       inkl. `save="name"` ohne Endung) — per Bild bestätigt, alle Aufrufe
       liefern `None`.
+- [x] Commit + Push nach GitHub
+
+## Nachtrag: Fehlerbalken-Styling (Endcaps + dunklere Farbe)
+
+Baseline: Commit `227a82e` (Ende Runde 2).
+
+- [x] `style.py`: `darken_color(color, factor=0.7)` ergänzt (RGB-Skalierung
+      über `matplotlib.colors.to_rgb`).
+- [x] `plot_adev`: neue Parameter `capsize=0` (Default weiterhin ohne
+      Endcaps — `capsize=3` z.B. fügt sie hinzu) und `errorbar_color=None`
+      (Default: dunklere Variante der Punktefarbe via `darken_color`,
+      standardmäßig aktiv; explizite Farbe oder z.B. `COLORS["frequency"]`
+      übergeben, um wie vorher gleichfarbig zu sein).
+- [x] `overview_figure`: `capsize`/`errorbar_color` ergänzt (gleicher
+      Default `capsize=0`), an beide ADEV-Panels durchgereicht.
+- [x] `plot()`-Wrapper: keine Änderung nötig — `capsize`/`errorbar_color`
+      laufen bereits über `**kwargs` durch (sowohl `kind="adev"` direkt zu
+      `plot_adev`, als auch `kind="overview"` zu `overview_figure`).
+- [x] Tests ergänzt: dunklere Farbe standardmäßig vorhanden (aber keine
+      Endcaps), `capsize=3` (o.ä.) schaltet Endcaps zu, `errorbar_color`
+      überschreibbar, Durchreichung in `overview_figure` geprüft. `pytest`
+      grün (56 passed).
+- [x] Manueller Smoke-Check per Bild bestätigt.
 - [ ] Commit + Push nach GitHub
+
+**Rückgängig machen:** `errorbar_color=COLORS["frequency"]`/`COLORS["power"]`
+an `plot_adev`/`overview_figure`/`plot()` übergeben, um wieder gleichfarbige
+Fehlerbalken wie vorher zu bekommen (Endcaps sind per Default `capsize=0`
+ohnehin aus). Zusätzlich komplett per `git revert
+<commit-hash-dieses-nachtrags>` — Baseline `227a82e` bleibt
+dafür sauber erhalten.

@@ -14,7 +14,7 @@ from ltatools.plotting import (
     plot_timeseries,
     psd_figure,
 )
-from ltatools.style import COLORS
+from ltatools.style import COLORS, darken_color
 
 
 def _load_df(write_lta, **kwargs):
@@ -72,6 +72,41 @@ def test_plot_adev_errorbars_false_suppresses_bars():
 
     assert len(ax_on.containers[0].lines[2]) > 0
     assert len(ax_off.containers[0].lines[2]) == 0
+
+
+def test_plot_adev_errorbar_default_has_darker_color_and_no_endcaps():
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+    dev_err = np.array([0.01, 0.007, 0.005])
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency")
+    container = ax.containers[0]
+    data_line, caplines, barlinecols = container.lines
+
+    assert len(caplines) == 0
+    assert to_rgba(barlinecols[0].get_color()[0]) == to_rgba(darken_color(COLORS["frequency"]))
+    assert to_rgba(barlinecols[0].get_color()[0]) != to_rgba(COLORS["frequency"])
+
+
+def test_plot_adev_errorbar_capsize_adds_endcaps():
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+    dev_err = np.array([0.01, 0.007, 0.005])
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", capsize=3)
+    _, caplines, _ = ax.containers[0].lines
+    assert len(caplines) > 0
+    assert to_rgba(caplines[0].get_markeredgecolor()) == to_rgba(darken_color(COLORS["frequency"]))
+
+
+def test_plot_adev_errorbar_color_override():
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+    dev_err = np.array([0.01, 0.007, 0.005])
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", errorbar_color="red")
+    _, _, barlinecols = ax.containers[0].lines
+    assert to_rgba(barlinecols[0].get_color()[0]) == to_rgba("red")
 
 
 def test_plot_adev_title():
@@ -147,6 +182,26 @@ def test_overview_figure_errorbars_false(write_lta):
 
     assert len(ax_freq.containers[0].lines[2]) == 0
     assert len(ax_power.containers[0].lines[2]) == 0
+
+
+def test_overview_figure_adev_panels_have_darker_errorbars_and_no_endcaps_by_default(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    fig, axes = overview_figure(df, taus="octave")
+    _, ax_freq, ax_power = axes
+
+    for ax, quantity in [(ax_freq, "frequency"), (ax_power, "power")]:
+        _, caplines, barlinecols = ax.containers[0].lines
+        assert len(caplines) == 0
+        assert to_rgba(barlinecols[0].get_color()[0]) == to_rgba(darken_color(COLORS[quantity]))
+
+
+def test_overview_figure_capsize_adds_endcaps(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    fig, axes = overview_figure(df, taus="octave", capsize=3)
+    _, ax_freq, ax_power = axes
+
+    assert len(ax_freq.containers[0].lines[1]) > 0
+    assert len(ax_power.containers[0].lines[1]) > 0
 
 
 def test_overview_figure_timeseries_power_unit_matches_adev_default(write_lta):

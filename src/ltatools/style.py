@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import numpy as np
+import matplotlib.colors as mcolors
 
 COLORS = {
     "frequency": "tab:blue",
     "wavelength": "tab:blue",  # same visual identity as frequency
     "power": "tab:orange",
 }
+
+
+def darken_color(color, factor=0.7):
+    """Return a darker variant of `color`.
+
+    Parameters
+    ----------
+    color : str or tuple
+        Any matplotlib-recognized color (e.g. ``"tab:blue"``).
+    factor : float, default 0.7
+        Multiplier applied to each RGB channel; smaller values are darker.
+
+    Returns
+    -------
+    tuple of float
+        RGB triple in ``[0, 1]``.
+    """
+    r, g, b = mcolors.to_rgb(color)
+    return (r * factor, g * factor, b * factor)
 
 _FREQUENCY_FACTORS = {
     "THz": 1.0,

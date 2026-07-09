@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 from .analysis import compute_oadev, compute_psd, find_stable_segments
 from .io import load_lta_file
-from .style import COLORS, adev_label, axis_label, psd_label, scale_frequency, scale_power
+from .style import COLORS, adev_label, axis_label, darken_color, psd_label, scale_frequency, scale_power
 
 _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "uW"}
 
@@ -126,7 +126,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
 
 def plot_adev(
     tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None,
-    errorbars=True, title=None, save=None,
+    errorbars=True, title=None, save=None, capsize=0, errorbar_color=None,
 ):
     """Log-log Allan deviation plot with error bars.
 
@@ -155,6 +155,14 @@ def plot_adev(
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
         `ax` was passed in, this saves the entire containing figure.
+    capsize : float, default 0
+        Size of the error bar end caps, in points. ``0`` draws error bars
+        without caps (the default); set e.g. ``capsize=3`` to add caps.
+    errorbar_color : str or tuple, optional
+        Color for the error bars. Defaults to a darkened version of the
+        marker color (see `style.darken_color`) so error bars stand out
+        against the data points. Pass the same color as the marker (e.g.
+        ``COLORS["frequency"]``) to make them match again.
 
     Returns
     -------
@@ -164,6 +172,7 @@ def plot_adev(
     --------
     >>> tau, dev, dev_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
     >>> plot_adev(tau, dev, dev_err, unit="MHz", save="adev_freq")
+    >>> plot_adev(tau, dev, dev_err, unit="MHz", capsize=3)  # with end caps
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
@@ -172,8 +181,10 @@ def plot_adev(
     dev_scaled = scale(dev, unit)
 
     yerr = scale(dev_err, unit) if (errorbars and dev_err is not None) else None
+    color = COLORS[quantity]
+    ecolor = errorbar_color if errorbar_color is not None else darken_color(color)
 
-    ax.errorbar(tau, dev_scaled, yerr=yerr, fmt="x", color=COLORS[quantity])
+    ax.errorbar(tau, dev_scaled, yerr=yerr, fmt="x", color=color, ecolor=ecolor, capsize=capsize)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$\tau$ in s")
@@ -274,6 +285,8 @@ def overview_figure(
     errorbars=True,
     markersize=4,
     save=None,
+    capsize=0,
+    errorbar_color=None,
 ):
     """Combined overview figure: timeseries on top, frequency and power ADEV below.
 
@@ -299,6 +312,12 @@ def overview_figure(
     save : str or pathlib.Path, optional
         If given, the figure is saved as a 300 dpi PNG; the parent
         directory is created if it does not exist.
+    capsize : float, default 0
+        Passed to ``plot_adev`` for both ADEV panels; ``0`` draws error
+        bars without caps (the default), set e.g. ``capsize=3`` to add caps.
+    errorbar_color : str or tuple, optional
+        Passed to ``plot_adev`` for both ADEV panels. Defaults to a
+        darkened version of each panel's marker color.
 
     Returns
     -------
@@ -310,6 +329,7 @@ def overview_figure(
     --------
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = overview_figure(df, freq_unit="kHz", errorbars=False, save="overview")
+    >>> fig, axes = overview_figure(df, capsize=3)  # with end caps
     """
     fig = plt.figure(figsize=(12, 8), constrained_layout=True)
     gs = fig.add_gridspec(2, 2)
@@ -325,6 +345,7 @@ def overview_figure(
     plot_adev(
         tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
         errorbars=errorbars, title="Frequency Allan Deviation",
+        capsize=capsize, errorbar_color=errorbar_color,
     )
 
     ax_power = fig.add_subplot(gs[1, 1])
@@ -332,6 +353,7 @@ def overview_figure(
     plot_adev(
         tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
         errorbars=errorbars, title="Power Allan Deviation",
+        capsize=capsize, errorbar_color=errorbar_color,
     )
 
     if save is not None:
@@ -487,7 +509,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     **kwargs
         Forwarded to the underlying plotting function for the chosen
         `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
-        `unit`, `title`, `ax`, ...).
+        `unit`, `title`, `ax`, `capsize`, `errorbar_color`, ...).
 
     Returns
     -------
