@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from .analysis import compute_oadev, compute_psd, find_stable_segments
@@ -29,7 +30,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4, save=None):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -52,11 +53,21 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         Target unit for the right (power) axis; see `scale_power`.
     markersize : float, default 4
         Marker size for both series.
+    save : str or pathlib.Path, optional
+        If given, the figure containing `ax1` is saved as a 300 dpi PNG;
+        the parent directory is created if it does not exist. When an
+        existing `ax` was passed in, this saves the entire containing
+        figure.
 
     Returns
     -------
     ax_left, ax_right : matplotlib.axes.Axes
         The frequency/wavelength axis and the power axis.
+
+    Examples
+    --------
+    >>> df = load_lta_file("scan.lta")
+    >>> plot_timeseries(df, kind="freq", freq_unit="MHz", save="timeseries")
     """
     fmt = "x-" if lines else "x"
 
@@ -104,12 +115,18 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
 
     ax1.grid(True, which="both", ls="--", alpha=0.5)
 
+    if save is not None:
+        fig = ax1.get_figure()
+        save_path = Path(save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300)
+
     return ax1, ax2
 
 
 def plot_adev(
-    tau, dev, dev_err=None, *, ci_bounds=None, unit="MHz", quantity="frequency", ax=None,
-    errorbars=True, title=None,
+    tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None,
+    errorbars=True, title=None, save=None,
 ):
     """Log-log Allan deviation plot with error bars.
 
@@ -121,28 +138,32 @@ def plot_adev(
         Allan deviation values, in the same native unit as `compute_oadev`
         was given (THz for frequency, uW for power, nm for wavelength).
     dev_err : array_like, optional
-        Naive symmetric error of `dev` (e.g. from ``compute_oadev``'s
-        `dev_err` return value). Ignored if `ci_bounds` is given.
-    ci_bounds : tuple of array_like, optional
-        ``(lower, upper)`` confidence bounds for `dev` (e.g. from
-        ``compute_oadev``'s `ci` return value), drawn as asymmetric error
-        bars. Takes precedence over `dev_err`.
+        Error of `dev` (e.g. from ``compute_oadev``'s `dev_err` return
+        value).
     unit : str, default "MHz"
-        Target unit for `dev`/`dev_err`/`ci_bounds`; see
+        Target unit for `dev`/`dev_err`; see
         `scale_frequency`/`scale_power`.
     quantity : {"frequency", "wavelength", "power"}, default "frequency"
         Physical quantity `dev` represents. Determines color and scaling.
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
     errorbars : bool, default True
-        If False, `dev_err`/`ci_bounds` are ignored and no error bars are
-        drawn.
+        If False, `dev_err` is ignored and no error bars are drawn.
     title : str, optional
         If given, set as the axes title.
+    save : str or pathlib.Path, optional
+        If given, the figure containing `ax` is saved as a 300 dpi PNG; the
+        parent directory is created if it does not exist. When an existing
+        `ax` was passed in, this saves the entire containing figure.
 
     Returns
     -------
     matplotlib.axes.Axes
+
+    Examples
+    --------
+    >>> tau, dev, dev_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
+    >>> plot_adev(tau, dev, dev_err, unit="MHz", save="adev_freq")
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
@@ -150,20 +171,7 @@ def plot_adev(
     scale = _quantity_scaler(quantity)
     dev_scaled = scale(dev, unit)
 
-    if not errorbars:
-        yerr = None
-    elif ci_bounds is not None:
-        lower, upper = ci_bounds
-        lower_scaled = scale(lower, unit)
-        upper_scaled = scale(upper, unit)
-        yerr = [
-            np.clip(dev_scaled - lower_scaled, 0, None),
-            np.clip(upper_scaled - dev_scaled, 0, None),
-        ]
-    elif dev_err is not None:
-        yerr = scale(dev_err, unit)
-    else:
-        yerr = None
+    yerr = scale(dev_err, unit) if (errorbars and dev_err is not None) else None
 
     ax.errorbar(tau, dev_scaled, yerr=yerr, fmt="x", color=COLORS[quantity])
     ax.set_xscale("log")
@@ -174,10 +182,16 @@ def plot_adev(
     if title is not None:
         ax.set_title(title)
 
+    if save is not None:
+        fig = ax.get_figure()
+        save_path = Path(save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300)
+
     return ax
 
 
-def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None):
+def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None, save=None):
     """Log-log power (or amplitude) spectral density plot with a confidence band.
 
     Parameters
@@ -198,6 +212,10 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
         amplitude spectral density).
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
+    save : str or pathlib.Path, optional
+        If given, the figure containing `ax` is saved as a 300 dpi PNG; the
+        parent directory is created if it does not exist. When an existing
+        `ax` was passed in, this saves the entire containing figure.
 
     Returns
     -------
@@ -236,6 +254,12 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
     ax.set_ylabel(psd_label(quantity, _PSD_QUANTITY_UNITS[quantity], scaling=scaling))
     ax.grid(True, which="both", ls="--", alpha=0.5)
 
+    if save is not None:
+        fig = ax.get_figure()
+        save_path = Path(save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300)
+
     return ax
 
 
@@ -246,7 +270,6 @@ def overview_figure(
     freq_unit="MHz",
     power_unit="uW",
     taus="all",
-    ci=None,
     lines=False,
     errorbars=True,
     markersize=4,
@@ -267,10 +290,6 @@ def overview_figure(
         Unit for the timeseries power axis and the power ADEV panel.
     taus : str or numpy.ndarray, default "all"
         Averaging times passed to ``compute_oadev``.
-    ci : float, optional
-        If given, a chi-squared confidence interval (see ``compute_oadev``)
-        is computed and drawn for both ADEV panels instead of the naive
-        `dev_err` bars.
     lines : bool, default False
         Passed to ``plot_timeseries``.
     errorbars : bool, default True
@@ -286,6 +305,11 @@ def overview_figure(
     fig : matplotlib.figure.Figure
     axes : list of matplotlib.axes.Axes
         ``[ax_timeseries, ax_freq_adev, ax_power_adev]``.
+
+    Examples
+    --------
+    >>> df = load_lta_file("scan.lta")
+    >>> fig, axes = overview_figure(df, freq_unit="kHz", errorbars=False, save="overview")
     """
     fig = plt.figure(figsize=(12, 8), constrained_layout=True)
     gs = fig.add_gridspec(2, 2)
@@ -297,36 +321,18 @@ def overview_figure(
     )
 
     ax_freq = fig.add_subplot(gs[1, 0])
-    if ci is None:
-        tau_f, dev_f, dev_f_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"], taus=taus)
-        plot_adev(
-            tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
-            errorbars=errorbars, title="Frequency Allan Deviation",
-        )
-    else:
-        tau_f, dev_f, dev_f_err, _, bounds_f = compute_oadev(
-            df["frequency_THz"], time_s=df["time_s"], taus=taus, ci=ci
-        )
-        plot_adev(
-            tau_f, dev_f, dev_f_err, ci_bounds=bounds_f, unit=freq_unit, quantity="frequency", ax=ax_freq,
-            errorbars=errorbars, title="Frequency Allan Deviation",
-        )
+    tau_f, dev_f, dev_f_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"], taus=taus)
+    plot_adev(
+        tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
+        errorbars=errorbars, title="Frequency Allan Deviation",
+    )
 
     ax_power = fig.add_subplot(gs[1, 1])
-    if ci is None:
-        tau_p, dev_p, dev_p_err, _ = compute_oadev(df["power_uW"], time_s=df["time_s"], taus=taus)
-        plot_adev(
-            tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
-            errorbars=errorbars, title="Power Allan Deviation",
-        )
-    else:
-        tau_p, dev_p, dev_p_err, _, bounds_p = compute_oadev(
-            df["power_uW"], time_s=df["time_s"], taus=taus, ci=ci
-        )
-        plot_adev(
-            tau_p, dev_p, dev_p_err, ci_bounds=bounds_p, unit=power_unit, quantity="power", ax=ax_power,
-            errorbars=errorbars, title="Power Allan Deviation",
-        )
+    tau_p, dev_p, dev_p_err, _ = compute_oadev(df["power_uW"], time_s=df["time_s"], taus=taus)
+    plot_adev(
+        tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
+        errorbars=errorbars, title="Power Allan Deviation",
+    )
 
     if save is not None:
         save_path = Path(save)
@@ -362,6 +368,11 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
     fig : matplotlib.figure.Figure
     axes : list of matplotlib.axes.Axes
         ``[ax_freq_psd, ax_power_psd]``.
+
+    Examples
+    --------
+    >>> df = load_lta_file("scan.lta")
+    >>> fig, axes = psd_figure(df, scaling="asd", ci=0.95, save="psd")
     """
     fig, (ax_freq, ax_power) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
@@ -388,9 +399,9 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
     """Load an .lta file and produce its overview figure(s).
 
     Convenience wrapper around ``load_lta_file`` + ``overview_figure``
-    (and ``find_stable_segments`` when `segments` is True). For a PSD/ASD
-    view, call ``psd_figure`` directly — it is a separate figure type and
-    intentionally has no wrapper here.
+    (and ``find_stable_segments`` when `segments` is True). For any other
+    plot kind (PSD, standalone timeseries or ADEV), see ``plot``, which
+    also accepts an .lta path directly.
 
     Parameters
     ----------
@@ -410,9 +421,127 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
     -------
     (fig, axes) or list of (fig, axes)
         A single overview-figure result, or one per stable segment.
+
+    Examples
+    --------
+    >>> fig, axes = lta_overview("scan.lta")
+    >>> results = lta_overview("scan.lta", segments=True, n_segments=2)
     """
     df = load_lta_file(file_path, cleanup=cleanup)
     if segments:
         segs = find_stable_segments(df, n=n_segments)
         return [overview_figure(seg, **kwargs) for seg in segs]
     return overview_figure(df, **kwargs)
+
+
+_ADEV_QUANTITY_DEFAULTS = {
+    "frequency": {"column": "frequency_THz", "unit": "MHz", "title": "Frequency Allan Deviation"},
+    "power": {"column": "power_uW", "unit": "uW", "title": "Power Allan Deviation"},
+}
+
+_SPECTRUM_QUANTITY_COLUMNS = {
+    "frequency": "frequency_THz",
+    "power": "power_uW",
+}
+
+
+def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=False, **kwargs):
+    """Build (and optionally save) any ltatools plot from a DataFrame or an .lta file.
+
+    Single entry point covering every plot kind in this module — the
+    intended default way to make a plot interactively, since it returns
+    ``None`` (so nothing is echoed at the end of a notebook cell) and
+    accepts either an already-loaded DataFrame or a raw ``.lta`` path.
+
+    Parameters
+    ----------
+    data : pandas.DataFrame or str or pathlib.Path
+        Either a DataFrame from ``load_lta_file``/``find_stable_segments``,
+        or a path to an ``.lta`` file (loaded internally via
+        ``load_lta_file(data, cleanup=cleanup)``).
+    kind : {"overview", "psd", "timeseries", "adev", "spectrum"}, default "overview"
+        Which plot to build:
+
+        - ``"overview"`` — ``overview_figure``.
+        - ``"psd"`` — ``psd_figure`` (frequency + power PSD/ASD panels).
+        - ``"timeseries"`` — ``plot_timeseries``. Pass ``ts_kind="wl"`` in
+          `kwargs` to plot wavelength instead of frequency (default
+          ``"freq"``).
+        - ``"adev"`` — Allan deviation of a single column, computed via
+          ``compute_oadev`` and drawn via ``plot_adev``; `quantity`
+          selects the column.
+        - ``"spectrum"`` — PSD/ASD of a single column, computed via
+          ``compute_psd`` and drawn via ``plot_psd``; `quantity` selects
+          the column.
+    quantity : {"frequency", "power"}, default "frequency"
+        Column to use for ``kind="adev"``/``kind="spectrum"``. Ignored for
+        the other kinds.
+    save : str or pathlib.Path, optional
+        If given, the resulting figure is saved as a 300 dpi PNG. Treated
+        as a name rather than a full path: if it has no file suffix,
+        ``.png`` is appended. Parent directories are created as needed, so
+        e.g. ``save="figs/run1"`` saves to ``figs/run1.png``.
+    cleanup : bool, default False
+        Passed to ``load_lta_file`` when `data` is a path. Ignored when
+        `data` is already a DataFrame.
+    **kwargs
+        Forwarded to the underlying plotting function for the chosen
+        `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
+        `unit`, `title`, `ax`, ...).
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    ValueError
+        If `kind` is not one of the supported values.
+
+    Examples
+    --------
+    >>> plot("scan.lta", kind="overview", save="overview")
+    >>> df = load_lta_file("scan.lta")
+    >>> plot(df, kind="adev", quantity="power")
+    >>> plot(df, kind="psd", scaling="asd", save="figs/asd")
+    """
+    df = data if isinstance(data, pd.DataFrame) else load_lta_file(data, cleanup=cleanup)
+
+    save_path = None
+    if save is not None:
+        save_path = Path(save)
+        if save_path.suffix == "":
+            save_path = save_path.with_suffix(".png")
+
+    if kind == "overview":
+        overview_figure(df, save=save_path, **kwargs)
+    elif kind == "psd":
+        psd_figure(df, save=save_path, **kwargs)
+    elif kind == "timeseries":
+        ts_kind = kwargs.pop("ts_kind", "freq")
+        plot_timeseries(df, kind=ts_kind, save=save_path, **kwargs)
+    elif kind == "adev":
+        if quantity not in _ADEV_QUANTITY_DEFAULTS:
+            raise ValueError(f"Unknown quantity {quantity!r}; expected 'frequency' or 'power'")
+        defaults = _ADEV_QUANTITY_DEFAULTS[quantity]
+        taus = kwargs.pop("taus", "all")
+        unit = kwargs.pop("unit", defaults["unit"])
+        title = kwargs.pop("title", defaults["title"])
+        tau, dev, dev_err, _ = compute_oadev(df[defaults["column"]], time_s=df["time_s"], taus=taus)
+        plot_adev(tau, dev, dev_err, unit=unit, quantity=quantity, title=title, save=save_path, **kwargs)
+    elif kind == "spectrum":
+        if quantity not in _SPECTRUM_QUANTITY_COLUMNS:
+            raise ValueError(f"Unknown quantity {quantity!r}; expected 'frequency' or 'power'")
+        column = _SPECTRUM_QUANTITY_COLUMNS[quantity]
+        series = df[column] * 1e12 if quantity == "frequency" else df[column]
+        nperseg = kwargs.pop("nperseg", None)
+        ci = kwargs.pop("ci", None)
+        f, Pxx, *rest = compute_psd(series, time_s=df["time_s"], ci=ci, nperseg=nperseg)
+        bounds = rest[0] if rest else None
+        plot_psd(f, Pxx, ci_bounds=bounds, quantity=quantity, save=save_path, **kwargs)
+    else:
+        raise ValueError(
+            f"Unknown kind {kind!r}; expected one of 'overview', 'psd', 'timeseries', 'adev', 'spectrum'"
+        )
+
+    return None

@@ -21,7 +21,7 @@ def _estimate_rate(time_s):
     return 1.0 / np.median(dt)
 
 
-def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all", ci=None, alpha=None):
+def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all"):
     """Compute the overlap Allan deviation (OADEV) of a data series.
 
     Parameters
@@ -37,22 +37,6 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all",
         Passed through to ``allantools.oadev``.
     taus : str or array_like, default "all"
         Averaging times, passed through to ``allantools.oadev``.
-    ci : float, optional
-        If given, also compute a chi-squared confidence interval (e.g.
-        ``0.6827`` for a 1-sigma equivalent, or ``0.95``) for each `tau`,
-        following the two-step method of Riley [1]_: (1) identify the
-        dominant power-law noise type via ``allantools.autocorr_noise_id``
-        (or fix it with `alpha`), (2) compute the equivalent degrees of
-        freedom via ``allantools.edf_greenhall`` [2]_ and derive asymmetric
-        bounds via ``allantools.confidence_interval``.
-    alpha : int, optional
-        Power-law noise exponent to use for every `tau` instead of
-        estimating it per-tau (e.g. ``alpha=0`` for white FM, typical for a
-        locked laser). Only used when `ci` is given. When left as `None`,
-        the noise type is auto-identified per `tau` via
-        ``allantools.autocorr_noise_id``, which needs at least 30 points
-        after averaging by `tau`; at large `tau` (few points left) this
-        falls back to ``alpha=0`` (white FM).
 
     Returns
     -------
@@ -61,27 +45,17 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all",
     dev : numpy.ndarray
         Overlap Allan deviation values.
     dev_err : numpy.ndarray
-        Naive error of `dev` as returned by ``allantools`` (``dev / sqrt(n)``).
-        This does **not** account for the actual noise type or the
-        correlation introduced by overlapping samples and is **not** a
-        statistically correct confidence interval — use `ci` for that.
+        Error of `dev`, as returned directly by ``allantools.oadev``
+        (``dev / sqrt(n)``). This is the only error estimate this function
+        provides; it does not account for the actual noise type or the
+        correlation introduced by overlapping samples.
     n : numpy.ndarray
         Number of pairs used at each `tau`.
-    ci_bounds : tuple of numpy.ndarray, only if `ci` is given
-        ``(lower, upper)`` chi-squared confidence bounds for `dev`.
 
     Raises
     ------
     ValueError
         If neither `rate` nor `time_s` is given.
-
-    References
-    ----------
-    .. [1] W. J. Riley, "Handbook of Frequency Stability Analysis",
-       NIST Special Publication 1065 (2008), chapter 5.
-    .. [2] C. A. Greenhall & W. J. Riley, "Uncertainty of Stability
-       Variances Based on Finite Differences", Proc. 35th Annual PTTI
-       Systems and Applications Meeting (2003).
     """
     if rate is None:
         if time_s is None:
@@ -91,27 +65,7 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all",
     data = np.asarray(data)
     tau, dev, dev_err, n = at.oadev(data, rate=rate, data_type=data_type, taus=taus)
 
-    if ci is None:
-        return tau, dev, dev_err, n
-
-    N = len(data)
-    lower = np.empty_like(dev)
-    upper = np.empty_like(dev)
-    for i, (t, d) in enumerate(zip(tau, dev)):
-        m = max(int(round(t * rate)), 1)
-        a = alpha
-        if a is None:
-            try:
-                a = at.autocorr_noise_id(data, m, data_type=data_type)[0]
-            except NotImplementedError:
-                # too few points left after averaging by m to identify the
-                # noise type; assume white FM (alpha=0), the common case
-                # for a locked laser
-                a = 0
-        edf = at.edf_greenhall(alpha=a, d=2, m=m, N=N, overlapping=True, modified=False)
-        lower[i], upper[i] = at.confidence_interval(d, edf, ci=ci)
-
-    return tau, dev, dev_err, n, (lower, upper)
+    return tau, dev, dev_err, n
 
 
 def compute_psd(data, *, rate=None, time_s=None, ci=None, nperseg=None, resample=True, jitter_tol=0.01):

@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from matplotlib.collections import PolyCollection
@@ -7,6 +8,7 @@ from ltatools.io import load_lta_file
 from ltatools.plotting import (
     lta_overview,
     overview_figure,
+    plot,
     plot_adev,
     plot_psd,
     plot_timeseries,
@@ -80,23 +82,46 @@ def test_plot_adev_title():
     assert ax.get_title() == "Frequency Allan Deviation"
 
 
-def test_plot_adev_ci_bounds_overrides_dev_err():
+def test_plot_adev_save_creates_missing_dir(tmp_path):
     tau = np.array([1.0, 2.0, 4.0])
     dev = np.array([0.1, 0.07, 0.05])
     dev_err = np.array([0.01, 0.007, 0.005])
-    lower = dev - np.array([0.02, 0.015, 0.01])
-    upper = dev + np.array([0.03, 0.025, 0.02])
+    save_path = tmp_path / "sub" / "adev.png"
 
-    ax = plot_adev(tau, dev, dev_err, ci_bounds=(lower, upper), unit="MHz", quantity="frequency")
+    plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", save=save_path)
+    assert save_path.exists()
 
-    assert ax is not None
-    line = ax.get_lines()[0]
-    assert to_rgba(line.get_color()) == to_rgba(COLORS["frequency"])
+
+def test_plot_adev_save_with_external_ax(tmp_path):
+    tau = np.array([1.0, 2.0, 4.0])
+    dev = np.array([0.1, 0.07, 0.05])
+    save_path = tmp_path / "sub" / "adev_external.png"
+
+    fig, ax = plt.subplots()
+    plot_adev(tau, dev, unit="MHz", quantity="frequency", ax=ax, save=save_path)
+    assert save_path.exists()
+
+
+def test_plot_timeseries_save_creates_missing_dir(write_lta, tmp_path):
+    df = _load_df(write_lta, n_points=50)
+    save_path = tmp_path / "sub" / "timeseries.png"
+
+    plot_timeseries(df, kind="freq", save=save_path)
+    assert save_path.exists()
 
 
 def test_plot_psd_invalid_scaling_raises():
     with pytest.raises(ValueError):
         plot_psd([1.0, 2.0], [0.1, 0.2], scaling="bogus")
+
+
+def test_plot_psd_save_creates_missing_dir(tmp_path):
+    f = np.array([1.0, 2.0, 3.0, 4.0])
+    Pxx = np.array([0.4, 0.3, 0.2, 0.1])
+    save_path = tmp_path / "sub" / "psd_single.png"
+
+    plot_psd(f, Pxx, quantity="frequency", save=save_path)
+    assert save_path.exists()
 
 
 def test_overview_figure_axes_count(write_lta):
@@ -166,13 +191,6 @@ def test_lta_overview_segments(write_lta):
         assert len(axes) == 3
 
 
-def test_overview_figure_ci_smoke(write_lta):
-    df = _load_df(write_lta, n_points=200)
-    fig, axes = overview_figure(df, taus="octave", ci=0.683)
-    assert len(fig.axes) == 4
-    assert len(axes) == 3
-
-
 def test_psd_figure_psd_and_asd(write_lta):
     df = _load_df(write_lta, n_points=2000)
 
@@ -210,3 +228,62 @@ def test_psd_figure_save_creates_missing_dir(write_lta, tmp_path):
     save_path = tmp_path / "sub" / "psd.png"
     psd_figure(df, save=save_path)
     assert save_path.exists()
+
+
+_WRAPPER_KIND_KWARGS = {
+    "overview": {"taus": "octave"},
+    "psd": {},
+    "timeseries": {},
+    "adev": {"taus": "octave"},
+    "spectrum": {},
+}
+
+
+@pytest.mark.parametrize("kind", ["overview", "psd", "timeseries", "adev", "spectrum"])
+def test_plot_wrapper_dispatch_dataframe(write_lta, kind):
+    df = _load_df(write_lta, n_points=2000)
+    n_before = len(plt.get_fignums())
+
+    result = plot(df, kind=kind, **_WRAPPER_KIND_KWARGS[kind])
+
+    assert result is None
+    assert len(plt.get_fignums()) > n_before
+
+
+@pytest.mark.parametrize("kind", ["overview", "psd", "timeseries", "adev", "spectrum"])
+def test_plot_wrapper_dispatch_lta_path(write_lta, kind):
+    path = write_lta(n_points=2000)
+    n_before = len(plt.get_fignums())
+
+    result = plot(path, kind=kind, cleanup=True, **_WRAPPER_KIND_KWARGS[kind])
+
+    assert result is None
+    assert len(plt.get_fignums()) > n_before
+
+
+def test_plot_wrapper_returns_none(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    assert plot(df, kind="overview", taus="octave") is None
+
+
+def test_plot_wrapper_save_name_appends_png(write_lta, tmp_path):
+    df = _load_df(write_lta, n_points=200)
+    plot(df, kind="overview", taus="octave", save=str(tmp_path / "myfig"))
+    assert (tmp_path / "myfig.png").exists()
+
+
+def test_plot_wrapper_save_nested_dir(write_lta, tmp_path):
+    df = _load_df(write_lta, n_points=200)
+    plot(df, kind="overview", taus="octave", save=tmp_path / "sub" / "run1")
+    assert (tmp_path / "sub" / "run1.png").exists()
+
+
+def test_plot_wrapper_adev_quantity_power(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    assert plot(df, kind="adev", quantity="power", taus="octave") is None
+
+
+def test_plot_wrapper_unknown_kind_raises(write_lta):
+    df = _load_df(write_lta, n_points=200)
+    with pytest.raises(ValueError):
+        plot(df, kind="bogus")

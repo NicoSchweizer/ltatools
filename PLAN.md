@@ -26,3 +26,40 @@ zeigt die Power-Achse fest in **mW**, während der ADEV-Power-Panel in
 - [x] Manueller Smoke-Check (Overview-Figure mit `errorbars=False`,
       `freq_unit="GHz"`, `power_unit="mW"` vs. Default) — per Bild bestätigt
 - [x] Commit + Push nach GitHub
+
+# Runde 2: ADEV-CI entfernen, save-Parameter, plot()-Wrapper, Docstring-Beispiele
+
+Baseline: Commit `17bbb15` (Ende Runde 1).
+
+- [x] `compute_oadev` (`analysis.py`): `ci`/`alpha` + Chi²-CI-Zweig (Riley-
+      Methode über `autocorr_noise_id`/`edf_greenhall`/`confidence_interval`)
+      entfernt; gibt nur noch `tau, dev, dev_err, n` zurück (die naive,
+      direkt von `allantools.oadev()` gelieferte Fehlerangabe).
+      `compute_psd`/`plot_psd`/`psd_figure` und deren eigenes, unabhängiges
+      Chi²-Konfidenzband bleiben unangetastet.
+- [x] `plot_adev`: `ci_bounds`-Parameter entfernt, `save`-Parameter ergänzt.
+- [x] `plot_timeseries` / `plot_psd`: `save`-Parameter ergänzt (speichert
+      über `ax.get_figure()`, funktioniert auch mit von außen übergebenem
+      `ax`).
+- [x] `overview_figure`: `ci`-Parameter entfernt, ADEV-Panels vereinfacht.
+- [x] Neue Wrapper-Funktion `plot(data, kind=..., quantity=..., save=...,
+      cleanup=...)` in `plotting.py`: nimmt DataFrame ODER `.lta`-Pfad,
+      deckt `kind` ∈ {overview, psd, timeseries, adev, spectrum} ab,
+      `save` ist ein Name (Endung wird ergänzt), gibt `None` zurück (kein
+      `<Axes: ...>`-Repr-Text mehr im Notebook).
+- [x] `__init__.py`: `plot` exportiert.
+- [x] Docstring-`Examples` ergänzt bei `plot`, `overview_figure`,
+      `psd_figure`, `lta_overview`, `plot_adev`, `plot_timeseries`.
+- [x] Tests: 2 ADEV-CI-Tests in `test_analysis.py` gelöscht
+      (`test_compute_oadev_ci_brackets_dev`,
+      `test_compute_oadev_noise_id_auto_widens_relatively_at_large_tau`),
+      2 ADEV-CI-Tests in `test_plotting.py` gelöscht
+      (`test_plot_adev_ci_bounds_overrides_dev_err`,
+      `test_overview_figure_ci_smoke`), `test_psd_figure_ci_band`
+      unverändert gelassen; Save-Tests für die drei Einzel-Panel-Funktionen
+      und Dispatch-/Save-/Fehler-Tests für `plot()` ergänzt.
+      `pytest` grün (51 passed).
+- [x] Manueller Smoke-Check aller 5 `kind`s über `plot()` (DataFrame-Input,
+      inkl. `save="name"` ohne Endung) — per Bild bestätigt, alle Aufrufe
+      liefern `None`.
+- [ ] Commit + Push nach GitHub

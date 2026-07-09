@@ -38,28 +38,6 @@ def test_compute_oadev_requires_rate_or_time_s():
         compute_oadev([1.0, 2.0, 3.0])
 
 
-def test_compute_oadev_ci_brackets_dev():
-    rng = np.random.default_rng(42)
-    data = rng.normal(0, 1.0, 4000)
-
-    tau, dev, dev_err, n, (lower, upper) = compute_oadev(
-        data, rate=10.0, taus="octave", ci=0.683, alpha=0
-    )
-
-    assert np.all((lower < dev) & (dev < upper))
-
-
-def test_compute_oadev_noise_id_auto_widens_relatively_at_large_tau():
-    rng = np.random.default_rng(42)
-    data = rng.normal(0, 1.0, 4000)
-
-    tau, dev, dev_err, n, (lower, upper) = compute_oadev(data, rate=10.0, taus="octave", ci=0.683)
-
-    assert np.all((lower < dev) & (dev < upper))
-    rel_width = (upper - lower) / dev
-    assert rel_width[-1] > rel_width[0]
-
-
 def test_compute_psd_white_noise_level():
     rng = np.random.default_rng(3)
     fs = 1000.0
