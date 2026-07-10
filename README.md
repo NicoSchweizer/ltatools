@@ -3,46 +3,65 @@
 HighFinesse wavemeter `.lta` file analysis: loading, Allan deviation, power spectral density,
 timeseries and overview plots.
 
-Successor to the `wavemeter-helper` prototype (see `legacy/prototype.py`, reference only — not
-imported from).
-
 ## Install
 
 ```bash
+pip install git+https://github.com/NicoSchweizer/ltatools.git
+```
+
+For local development (editable install, with `pytest`):
+
+```bash
+git clone https://github.com/NicoSchweizer/ltatools.git
+cd ltatools
 pip install -e ".[dev]"
 ```
 
-## Standard workflow
+## Quick start
 
-Two lines cover the common case: load a file, get a combined overview figure (timeseries on top,
-frequency and power Allan deviation below).
+`plot()` is the single entry point for building and (optionally) saving any plot — it accepts
+either an already-loaded DataFrame or a raw `.lta` path, and always returns `None` so nothing is
+echoed at the end of a notebook cell.
 
 ```python
-from ltatools import load_lta_file, overview_figure
+from ltatools import plot
 
-df = load_lta_file("data/2026-07-01_lock_test.lta", cleanup=True)
-fig, axes = overview_figure(df)
+plot("data/2026-07-01_lock_test.lta", kind="overview", save="figures/lock_test_overview")
 ```
 
-## Use cases
+That's a timeseries panel (frequency + power) on top, frequency and power Allan deviation panels
+below, saved as `figures/lock_test_overview.png`.
 
-**New, stable measurement (standard case):**
+## `plot()` — all plot kinds
+
+| `kind`        | Produces                                              | Notable kwargs                          |
+|---------------|--------------------------------------------------------|------------------------------------------|
+| `"overview"`  | timeseries + frequency/power ADEV (default)             | `freq_unit`, `power_unit`, `errorbars`, `regions` |
+| `"psd"`       | frequency + power PSD/ASD, side by side                 | `scaling="psd"\|"asd"`, `ci`            |
+| `"timeseries"`| frequency-or-wavelength + power over time                | `freq_unit`, `power_unit`, `lines`      |
+| `"adev"`      | Allan deviation of one column                            | `quantity="frequency"\|"power"`, `unit`, `regions` |
+| `"spectrum"`  | PSD/ASD of one column                                    | `quantity="frequency"\|"power"`, `scaling` |
 
 ```python
-from ltatools import load_lta_file, overview_figure
+from ltatools import plot, load_lta_file
 
-df = load_lta_file("data/2026-07-01_lock_test.lta", cleanup=True)
-fig, axes = overview_figure(df, freq_unit="MHz", save="figures/lock_test_overview.png")
+df = load_lta_file("data/run.lta", cleanup=True)
+
+plot(df, kind="adev", quantity="power", unit="uW")
+plot(df, kind="psd", scaling="asd", ci=0.95, save="figures/run_psd")
+plot(df, kind="timeseries", freq_unit="MHz")
 ```
 
-**Old measurement with mode hops:**
+## Old measurement with mode hops
+
+Split into the longest mode-hop-free segments first, then build an overview per segment:
 
 ```python
-from ltatools import load_lta_file, find_stable_segments, overview_figure
+from ltatools import load_lta_file, find_stable_segments, plot
 
 df = load_lta_file("data/2025-11-03_free_running.lta", cleanup=True)
 for i, seg in enumerate(find_stable_segments(df, n=3)):
-    overview_figure(seg, freq_unit="MHz", save=f"figures/free_running_seg{i}.png")
+    plot(seg, kind="overview", freq_unit="MHz", save=f"figures/free_running_seg{i}")
 ```
 
 Or in one call via `lta_overview`:
@@ -55,23 +74,41 @@ results = lta_overview(
 )
 ```
 
-**Frequency ADEV in kHz with a chi-squared confidence interval (assuming white FM):**
+## Short/mid/long-term ADEV summary (`regions`)
+
+`plot_adev`/`overview_figure`/`plot(..., kind="adev"|"overview")` can annotate the ADEV curve with
+a mean or median per τ region, each with a propagated error — e.g. a "short/mid/long term
+linewidth" summary as commonly shown in frequency-stability plots.
 
 ```python
-from ltatools import load_lta_file, compute_oadev, plot_adev
+from ltatools import load_lta_file, plot
 
 df = load_lta_file("data/run.lta", cleanup=True)
-tau, dev, err, n, (lo, hi) = compute_oadev(
-    df["frequency_THz"], time_s=df["time_s"], ci=0.683, alpha=0  # alpha=0: white FM
-)
-plot_adev(tau, dev, ci_bounds=(lo, hi), unit="kHz", quantity="frequency")
+plot(df, kind="adev", quantity="frequency", unit="MHz", regions=True)
 ```
 
-The naive `err` (`dev / sqrt(n)`) from `allantools` ignores noise type and overlap correlation and
-is not a real confidence interval — pass `ci` to get a proper chi-squared interval instead (see
-References below). `overview_figure(df, ci=...)` applies the same interval to both its ADEV panels.
+`regions=True` uses the default boundaries (0.25 s, 2 s); pass a list of τ values in seconds (e.g.
+`regions=[0.1, 10]`) for custom boundaries. `region_agg="mean"|"median"` selects the aggregation
+(default `"mean"`). The annotated error is the **propagated** error of the region's `dev_err`
+values (quadrature sum divided by the point count), not the standard deviation of the ADEV values
+in the region — the ADEV typically has a real trend across a region, so its raw spread would
+overstate the actual measurement uncertainty. The annotation is shown one unit step finer than the
+axis unit (e.g. kHz on an MHz axis, see `ltatools.style.finer_unit`).
 
-**PSD/ASD with a confidence band, as a separate figure:**
+## Error bar styling
+
+`plot_adev`/`overview_figure`/`plot()` support `errorbars=False` (hide them), `capsize` (end caps,
+default `0` = none), and `errorbar_color` (default: a darkened version of the marker color).
+
+```python
+from ltatools import load_lta_file, plot
+
+df = load_lta_file("data/run.lta", cleanup=True)
+plot(df, kind="overview", errorbars=False)
+plot(df, kind="adev", capsize=3)
+```
+
+## PSD/ASD with a confidence band
 
 ```python
 from ltatools import load_lta_file, psd_figure
@@ -80,20 +117,41 @@ df = load_lta_file("data/run.lta", cleanup=True)
 fig, axes = psd_figure(df, scaling="asd", ci=0.95, save="figures/run_psd.png")
 ```
 
-`psd_figure` is intentionally **not** part of `overview_figure` — call it separately when a
-spectral view is needed. `compute_psd`/`plot_psd` are available individually for custom axes, the
-same way `compute_oadev`/`plot_adev` are.
+`psd_figure` is intentionally **not** part of `overview_figure` — call it separately (or via
+`plot(df, kind="psd")`) when a spectral view is needed. `compute_psd`/`plot_psd` are available
+individually for custom axes, the same way `compute_oadev`/`plot_adev` are.
+
+## Custom axes / composing your own figure
+
+The building blocks (`plot_timeseries`, `plot_adev`, `plot_psd`) each take an `ax=` and a `save=`
+and return the axes they drew into, for composing a custom `matplotlib` figure:
+
+```python
+import matplotlib.pyplot as plt
+from ltatools import load_lta_file, compute_oadev, plot_adev
+
+df = load_lta_file("data/run.lta", cleanup=True)
+tau, dev, dev_err, n = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
+
+fig, ax = plt.subplots()
+plot_adev(tau, dev, dev_err, unit="kHz", quantity="frequency", ax=ax, save="figures/adev.png")
+```
 
 ## Notes
 
-- All plotting functions return `fig`/`ax` and never call `plt.show()`; display happens in the
-  caller (Jupyter renders figures automatically).
-- The prototype's `lta_to_adev`/`lta_to_t_s` wrappers were intentionally not ported — `lta_overview`
-  (a thin wrapper around `load_lta_file` + `overview_figure` + `find_stable_segments`) replaces
-  both with a single overview-focused entry point. There is no `lta_psd`; use `load_lta_file` +
-  `psd_figure` directly (two lines, same pattern as the standard workflow above).
-- `compute_psd` treats frequency and power in Hz and µW respectively; `psd_figure` does the THz→Hz
-  conversion before calling it. `compute_psd` itself stays unit-agnostic, same as `compute_oadev`.
+- All plotting functions except `plot()` return `fig`/`ax` (or a tuple of axes) and never call
+  `plt.show()`; display happens in the caller (Jupyter renders figures automatically). `plot()`
+  itself always returns `None`, specifically so it doesn't echo an `Axes` repr at the end of a
+  notebook cell.
+- `compute_oadev`'s `dev_err` is the naive error returned directly by `allantools.oadev`
+  (`dev / sqrt(n)`) — it doesn't account for noise type or overlap correlation. There is no
+  built-in chi-squared confidence interval for ADEV in this package (kept deliberately simple);
+  `compute_psd`'s `ci` confidence band is unrelated and unaffected.
+- `compute_psd` treats frequency and power in Hz and µW respectively; `psd_figure`/
+  `plot(kind="spectrum", quantity="frequency")` do the THz→Hz conversion before calling it.
+  `compute_psd` itself stays unit-agnostic, same as `compute_oadev`.
+- Default text size across all plots is set via `matplotlib.rcParams` at import time
+  (`ltatools.style`), slightly larger than matplotlib's defaults for readability.
 
 ## References
 
@@ -106,12 +164,5 @@ same way `compute_oadev`/`plot_adev` are.
   Wiley (2010).
 - IEEE Std 1139-2008, *Standard Definitions of Physical Quantities for Fundamental Frequency and
   Time Metrology*.
-- W. J. Riley, *Handbook of Frequency Stability Analysis*, NIST Special Publication 1065 (2008),
-  ch. 5 — chi-squared confidence intervals and noise-type identification for `compute_oadev`.
-- C. A. Greenhall & W. J. Riley, *Uncertainty of Stability Variances Based on Finite
-  Differences*, Proc. 35th PTTI Systems and Applications Meeting (2003) — the EDF algorithm
-  behind `allantools.edf_greenhall`.
-- S. R. Stein, *Frequency and Time – Their Measurement and Characterization*, in
-  *Precision Frequency Control*, Vol. 2, Academic Press (1985).
 - D. A. Howe, D. W. Allan & J. A. Barnes, *Properties of Signal Sources and Measurement
   Methods*, Proc. 35th Annual Symposium on Frequency Control (1981).
