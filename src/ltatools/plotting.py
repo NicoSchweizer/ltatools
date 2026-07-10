@@ -68,6 +68,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     --------
     >>> df = load_lta_file("scan.lta")
     >>> plot_timeseries(df, kind="freq", freq_unit="MHz", save="timeseries")
+    (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (uW)'>)
     """
     fmt = "x-" if lines else "x"
 
@@ -172,7 +173,9 @@ def plot_adev(
     --------
     >>> tau, dev, dev_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
     >>> plot_adev(tau, dev, dev_err, unit="MHz", save="adev_freq")
+    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
     >>> plot_adev(tau, dev, dev_err, unit="MHz", capsize=3)  # with end caps
+    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
@@ -329,6 +332,8 @@ def overview_figure(
     --------
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = overview_figure(df, freq_unit="kHz", errorbars=False, save="overview")
+    >>> axes
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in kHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in uW'>]
     >>> fig, axes = overview_figure(df, capsize=3)  # with end caps
     """
     fig = plt.figure(figsize=(12, 8), constrained_layout=True)
@@ -395,6 +400,8 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
     --------
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = psd_figure(df, scaling="asd", ci=0.95, save="psd")
+    >>> axes
+    [<Axes: xlabel='Frequency (Hz)', ylabel='ASD in Hz/$\\sqrt{\\mathrm{Hz}}$'>, <Axes: xlabel='Frequency (Hz)', ylabel='ASD in uW/$\\sqrt{\\mathrm{Hz}}$'>]
     """
     fig, (ax_freq, ax_power) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
@@ -447,7 +454,11 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
     Examples
     --------
     >>> fig, axes = lta_overview("scan.lta")
+    >>> axes
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in uW'>]
     >>> results = lta_overview("scan.lta", segments=True, n_segments=2)
+    >>> len(results)
+    2
     """
     df = load_lta_file(file_path, cleanup=cleanup)
     if segments:

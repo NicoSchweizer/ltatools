@@ -85,11 +85,23 @@ Baseline: Commit `227a82e` (Ende Runde 2).
       überschreibbar, Durchreichung in `overview_figure` geprüft. `pytest`
       grün (56 passed).
 - [x] Manueller Smoke-Check per Bild bestätigt.
-- [ ] Commit + Push nach GitHub
+- [x] Commit + Push nach GitHub (`ff1b3fa`)
 
 **Rückgängig machen:** `errorbar_color=COLORS["frequency"]`/`COLORS["power"]`
 an `plot_adev`/`overview_figure`/`plot()` übergeben, um wieder gleichfarbige
 Fehlerbalken wie vorher zu bekommen (Endcaps sind per Default `capsize=0`
-ohnehin aus). Zusätzlich komplett per `git revert
-<commit-hash-dieses-nachtrags>` — Baseline `227a82e` bleibt
-dafür sauber erhalten.
+ohnehin aus). Zusätzlich komplett per `git revert ff1b3fa` — Baseline
+`227a82e` bleibt dafür sauber erhalten.
+
+## Nachtrag: Docstring-Beispiele mit tatsächlichem Output
+
+Baseline: Commit `ff1b3fa`.
+
+- [x] `Examples`-Sektionen in `plot_timeseries`, `plot_adev`,
+      `overview_figure`, `psd_figure`, `lta_overview` um die tatsächliche
+      REPL-Ausgabe der jeweiligen Aufrufe ergänzt (nicht nur den Aufruf
+      selbst) — Reprs gegen echte Läufe mit synthetischen Daten verifiziert.
+      `plot()`-Beispiele bleiben ohne Output-Zeile, da die Funktion bewusst
+      `None` zurückgibt (dafür wird in einer REPL nichts angezeigt).
+- [x] `pytest` grün (56 passed, keine Funktionsänderung).
+- [ ] Commit + Push nach GitHub
