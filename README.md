@@ -163,6 +163,10 @@ plot_adev(tau, dev, dev_err, unit="kHz", quantity="frequency", ax=ax, save="figu
   `compute_psd` itself stays unit-agnostic, same as `compute_oadev`.
 - Default text size across all plots is set via `matplotlib.rcParams` at import time
   (`ltatools.style`), slightly larger than matplotlib's defaults for readability.
+- `overview_figure`/`plot(kind="overview"|"adev")` default to `taus="octave"` (powers of two),
+  not `"all"` — on a 145k-row file this is ~450x faster with a visually indistinguishable ADEV
+  curve on the usual log-log plot. Pass `taus="all"` explicitly for the exhaustive (much slower)
+  computation. `compute_oadev` itself still defaults to `taus="all"` when called directly.
 
 ## References
 

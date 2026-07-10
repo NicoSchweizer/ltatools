@@ -343,7 +343,7 @@ def overview_figure(
     kind="freq",
     freq_unit="MHz",
     power_unit="uW",
-    taus="all",
+    taus="octave",
     lines=False,
     errorbars=True,
     markersize=4,
@@ -366,8 +366,12 @@ def overview_figure(
         the frequency ADEV panel.
     power_unit : str, default "uW"
         Unit for the timeseries power axis and the power ADEV panel.
-    taus : str or numpy.ndarray, default "all"
-        Averaging times passed to ``compute_oadev``.
+    taus : str or numpy.ndarray, default "octave"
+        Averaging times passed to ``compute_oadev``. ``"octave"`` (powers of
+        two) is dramatically faster than ``"all"`` on large files — e.g.
+        ~450x on a 145k-row file — with visually indistinguishable results
+        on the usual log-log ADEV plot; pass ``taus="all"`` for the
+        exhaustive (much slower) computation.
     lines : bool, default False
         Passed to ``plot_timeseries``.
     errorbars : bool, default True
@@ -635,7 +639,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         if quantity not in _ADEV_QUANTITY_DEFAULTS:
             raise ValueError(f"Unknown quantity {quantity!r}; expected 'frequency' or 'power'")
         defaults = _ADEV_QUANTITY_DEFAULTS[quantity]
-        taus = kwargs.pop("taus", "all")
+        taus = kwargs.pop("taus", "octave")
         unit = kwargs.pop("unit", defaults["unit"])
         title = kwargs.pop("title", defaults["title"])
         tau, dev, dev_err, _ = compute_oadev(df[defaults["column"]], time_s=df["time_s"], taus=taus)
