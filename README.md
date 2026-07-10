@@ -32,6 +32,17 @@ plot("data/2026-07-01_lock_test.lta", kind="overview", save="figures/lock_test_o
 That's a timeseries panel (frequency + power) on top, frequency and power Allan deviation panels
 below, saved as `figures/lock_test_overview.png`.
 
+`data` can be a `.lta` path or an already-loaded `pandas.DataFrame` (auto-detected) — a path is
+loaded internally via `load_lta_file`. Pass `cleanup=True` to drop invalid rows (same as
+`load_lta_file`'s own `cleanup` parameter) when passing a path directly:
+
+```python
+plot("data/run.lta", kind="adev", quantity="power", cleanup=True)
+```
+
+`cleanup` is ignored if `data` is already a DataFrame — call `load_lta_file(..., cleanup=True)`
+yourself beforehand in that case.
+
 ## `plot()` — all plot kinds
 
 | `kind`        | Produces                                              | Notable kwargs                          |
