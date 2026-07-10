@@ -580,7 +580,9 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
           ``"freq"``).
         - ``"adev"`` — Allan deviation of a single column, computed via
           ``compute_oadev`` and drawn via ``plot_adev``; `quantity`
-          selects the column.
+          selects the column. Defaults to ``taus="all"`` (pass
+          ``taus="octave"`` in `kwargs` for the faster, sparser variant
+          used by default in ``kind="overview"``).
         - ``"spectrum"`` — PSD/ASD of a single column, computed via
           ``compute_psd`` and drawn via ``plot_psd``; `quantity` selects
           the column.
@@ -639,7 +641,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         if quantity not in _ADEV_QUANTITY_DEFAULTS:
             raise ValueError(f"Unknown quantity {quantity!r}; expected 'frequency' or 'power'")
         defaults = _ADEV_QUANTITY_DEFAULTS[quantity]
-        taus = kwargs.pop("taus", "octave")
+        taus = kwargs.pop("taus", "all")
         unit = kwargs.pop("unit", defaults["unit"])
         title = kwargs.pop("title", defaults["title"])
         tau, dev, dev_err, _ = compute_oadev(df[defaults["column"]], time_s=df["time_s"], taus=taus)
