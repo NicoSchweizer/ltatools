@@ -48,9 +48,7 @@ def load_lta_file(file_path: str | Path, cleanup: bool = False) -> pd.DataFrame:
     """
     path = Path(file_path)
     with open(path, encoding="cp1252", errors="ignore") as f:
-        lines = f.readlines()
-
-    header_row = next((i for i, line in enumerate(lines) if "Time" in line), None)
+        header_row = next((i for i, line in enumerate(f) if "Time" in line), None)
     if header_row is None:
         raise ValueError("Could not find the table header containing 'Time' in the file.")
 
