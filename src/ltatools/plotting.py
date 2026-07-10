@@ -19,7 +19,7 @@ from .io import load_lta_file
 from .style import COLORS, adev_label, axis_label, darken_color, finer_unit, psd_label, scale_frequency, scale_power
 
 _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "uW"}
-_REGION_LABEL_Y = 0.23
+_REGION_LABEL_Y = 0.5
 
 
 def _quantity_scaler(quantity):
@@ -244,15 +244,15 @@ def plot_adev(
         dev_err_region_scaled = scale(dev_err, region_unit)
         tau_arr = np.asarray(tau)
         for boundary in sorted(boundaries):
-            ax.axvline(boundary, color="gray", linestyle=":", linewidth=1)
+            ax.axvline(boundary, color="gray", linestyle="--", linewidth=1.5)
         for region in summarize_adev_regions(
             tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
         ):
             mask = (tau_arr >= region["tau_min"]) & (tau_arr < region["tau_max"])
             tau_center = float(np.median(tau_arr[mask]))
             ax.annotate(
-                f"{region['value']:.3g} {region_unit}\n±{region['error']:.2g} {region_unit}",
-                xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
+                f"{region['value']:.2f} {region_unit}\n±{region['error']:.2f} {region_unit}",
+                xy=(tau_center-0.1, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
 
