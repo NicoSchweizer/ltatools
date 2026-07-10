@@ -8,11 +8,18 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from .analysis import compute_oadev, compute_psd, find_stable_segments
+from .analysis import (
+    DEFAULT_ADEV_REGION_BOUNDARIES,
+    compute_oadev,
+    compute_psd,
+    find_stable_segments,
+    summarize_adev_regions,
+)
 from .io import load_lta_file
-from .style import COLORS, adev_label, axis_label, darken_color, psd_label, scale_frequency, scale_power
+from .style import COLORS, adev_label, axis_label, darken_color, finer_unit, psd_label, scale_frequency, scale_power
 
 _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "uW"}
+_REGION_LABEL_Y = 0.23
 
 
 def _quantity_scaler(quantity):
@@ -128,6 +135,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
 def plot_adev(
     tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None,
     errorbars=True, title=None, save=None, capsize=0, errorbar_color=None,
+    regions=None, region_agg="mean",
 ):
     """Log-log Allan deviation plot with error bars.
 
@@ -140,7 +148,7 @@ def plot_adev(
         was given (THz for frequency, uW for power, nm for wavelength).
     dev_err : array_like, optional
         Error of `dev` (e.g. from ``compute_oadev``'s `dev_err` return
-        value).
+        value). Required if `regions` is given.
     unit : str, default "MHz"
         Target unit for `dev`/`dev_err`; see
         `scale_frequency`/`scale_power`.
@@ -164,6 +172,35 @@ def plot_adev(
         marker color (see `style.darken_color`) so error bars stand out
         against the data points. Pass the same color as the marker (e.g.
         ``COLORS["frequency"]``) to make them match again.
+    regions : bool or sequence of float, optional
+        If given, split `tau` into regions and annotate each with an
+        aggregated value (see `region_agg`) plus its error, following
+        ``analysis.summarize_adev_regions`` — vertical dotted lines mark
+        the region boundaries, and each region gets a text annotation at a
+        fixed height (see `_REGION_LABEL_Y` in this module, a fraction of
+        the axes height from the bottom, so all region labels line up
+        regardless of each region's data values — e.g. a "short/mid/long
+        term" summary, as in a typical frequency-stability plot). ``True``
+        uses ``analysis.DEFAULT_ADEV_REGION_BOUNDARIES``
+        (0.25 s, 2 s); a sequence gives custom τ boundaries in seconds.
+        Requires `dev_err` (used for error propagation — see below).
+
+        The annotated error is the **propagated** error of each region's
+        aggregate (quadrature sum of the region's `dev_err` values divided
+        by the point count), not the standard deviation of the `dev`
+        values in the region. The Allan deviation typically has a real
+        trend across a region rather than scattering around a constant
+        value, so using the raw spread as an error bar would conflate
+        that trend with measurement uncertainty; propagating the
+        already-computed per-tau errors avoids this. See
+        `analysis.summarize_adev_regions` for details.
+
+        The annotated value/error are shown in a unit one step finer than
+        `unit` (see `style.finer_unit`), e.g. in kHz when ``unit="MHz"`` —
+        the axis itself stays in `unit`.
+    region_agg : {"mean", "median"}, default "mean"
+        Aggregation statistic used within each region when `regions` is
+        given. Ignored otherwise.
 
     Returns
     -------
@@ -175,6 +212,8 @@ def plot_adev(
     >>> plot_adev(tau, dev, dev_err, unit="MHz", save="adev_freq")
     <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
     >>> plot_adev(tau, dev, dev_err, unit="MHz", capsize=3)  # with end caps
+    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
+    >>> plot_adev(tau, dev, dev_err, unit="MHz", regions=True)  # short/mid/long-term summary
     <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
     """
     if ax is None:
@@ -195,6 +234,27 @@ def plot_adev(
     ax.grid(True, which="both", ls="--", alpha=0.5)
     if title is not None:
         ax.set_title(title)
+
+    if regions is not None:
+        if dev_err is None:
+            raise ValueError("regions requires dev_err for error propagation")
+        boundaries = DEFAULT_ADEV_REGION_BOUNDARIES if regions is True else regions
+        region_unit = finer_unit(unit, quantity)
+        dev_region_scaled = scale(dev, region_unit)
+        dev_err_region_scaled = scale(dev_err, region_unit)
+        tau_arr = np.asarray(tau)
+        for boundary in sorted(boundaries):
+            ax.axvline(boundary, color="gray", linestyle=":", linewidth=1)
+        for region in summarize_adev_regions(
+            tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
+        ):
+            mask = (tau_arr >= region["tau_min"]) & (tau_arr < region["tau_max"])
+            tau_center = float(np.median(tau_arr[mask]))
+            ax.annotate(
+                f"{region['value']:.3g} {region_unit}\n±{region['error']:.2g} {region_unit}",
+                xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
+                ha="center", va="center",
+            )
 
     if save is not None:
         fig = ax.get_figure()
@@ -290,6 +350,8 @@ def overview_figure(
     save=None,
     capsize=0,
     errorbar_color=None,
+    regions=None,
+    region_agg="mean",
 ):
     """Combined overview figure: timeseries on top, frequency and power ADEV below.
 
@@ -321,6 +383,15 @@ def overview_figure(
     errorbar_color : str or tuple, optional
         Passed to ``plot_adev`` for both ADEV panels. Defaults to a
         darkened version of each panel's marker color.
+    regions : bool or sequence of float, optional
+        Passed to ``plot_adev`` for both ADEV panels — annotates each
+        panel with a short/mid/long-term (or custom) τ-region summary; see
+        `plot_adev` for details. Requires `errorbars` data internally
+        (each panel's own `dev_err` from `compute_oadev` is used, so this
+        works regardless of the `errorbars` display toggle above).
+    region_agg : {"mean", "median"}, default "mean"
+        Passed to ``plot_adev`` for both ADEV panels. Ignored unless
+        `regions` is given.
 
     Returns
     -------
@@ -335,6 +406,7 @@ def overview_figure(
     >>> axes
     [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in kHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in uW'>]
     >>> fig, axes = overview_figure(df, capsize=3)  # with end caps
+    >>> fig, axes = overview_figure(df, regions=True)  # short/mid/long-term summary
     """
     fig = plt.figure(figsize=(12, 8), constrained_layout=True)
     gs = fig.add_gridspec(2, 2)
@@ -351,6 +423,7 @@ def overview_figure(
         tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
         errorbars=errorbars, title="Frequency Allan Deviation",
         capsize=capsize, errorbar_color=errorbar_color,
+        regions=regions, region_agg=region_agg,
     )
 
     ax_power = fig.add_subplot(gs[1, 1])
@@ -359,6 +432,7 @@ def overview_figure(
         tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
         errorbars=errorbars, title="Power Allan Deviation",
         capsize=capsize, errorbar_color=errorbar_color,
+        regions=regions, region_agg=region_agg,
     )
 
     if save is not None:
@@ -520,7 +594,10 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     **kwargs
         Forwarded to the underlying plotting function for the chosen
         `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
-        `unit`, `title`, `ax`, `capsize`, `errorbar_color`, ...).
+        `unit`, `title`, `ax`, `capsize`, `errorbar_color`, `regions`,
+        `region_agg`, ...). For ``kind="adev"``/``kind="overview"``,
+        `regions`/`region_agg` add a short/mid/long-term (or custom)
+        τ-region summary to the ADEV panel(s) — see `plot_adev`.
 
     Returns
     -------
@@ -537,6 +614,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     >>> df = load_lta_file("scan.lta")
     >>> plot(df, kind="adev", quantity="power")
     >>> plot(df, kind="psd", scaling="asd", save="figs/asd")
+    >>> plot(df, kind="adev", regions=True)  # short/mid/long-term summary
     """
     df = data if isinstance(data, pd.DataFrame) else load_lta_file(data, cleanup=cleanup)
 

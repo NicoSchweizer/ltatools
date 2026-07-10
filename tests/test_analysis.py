@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ltatools.analysis import compute_oadev, compute_psd, find_stable_segments
+from ltatools.analysis import (
+    DEFAULT_ADEV_REGION_BOUNDARIES,
+    compute_oadev,
+    compute_psd,
+    find_stable_segments,
+    summarize_adev_regions,
+)
 
 
 def test_compute_oadev_white_freq_noise_slope():
@@ -36,6 +42,77 @@ def test_compute_oadev_rate_from_time_s():
 def test_compute_oadev_requires_rate_or_time_s():
     with pytest.raises(ValueError):
         compute_oadev([1.0, 2.0, 3.0])
+
+
+def test_summarize_adev_regions_basic():
+    tau = np.array([0.1, 0.2, 1.0, 1.5, 5.0, 10.0])
+    dev = np.array([10.0, 20.0, 100.0, 200.0, 1000.0, 3000.0])
+    dev_err = np.array([1.0, 2.0, 5.0, 10.0, 50.0, 100.0])
+
+    regions = summarize_adev_regions(tau, dev, dev_err, boundaries=(0.25, 2.0), agg="mean")
+
+    assert len(regions) == 3
+    r0, r1, r2 = regions
+
+    assert r0["tau_min"] == 0.0 and r0["tau_max"] == 0.25
+    assert r0["n"] == 2
+    assert r0["value"] == pytest.approx(np.mean([10.0, 20.0]))
+    assert r0["error"] == pytest.approx(np.sqrt(1.0**2 + 2.0**2) / 2)
+
+    assert r1["tau_min"] == 0.25 and r1["tau_max"] == 2.0
+    assert r1["n"] == 2
+    assert r1["value"] == pytest.approx(np.mean([100.0, 200.0]))
+    assert r1["error"] == pytest.approx(np.sqrt(5.0**2 + 10.0**2) / 2)
+
+    assert r2["tau_min"] == 2.0 and r2["tau_max"] == np.inf
+    assert r2["n"] == 2
+    assert r2["value"] == pytest.approx(np.mean([1000.0, 3000.0]))
+    assert r2["error"] == pytest.approx(np.sqrt(50.0**2 + 100.0**2) / 2)
+
+
+def test_summarize_adev_regions_median_agg():
+    tau = np.array([0.1, 0.15, 0.2])
+    dev = np.array([10.0, 20.0, 30.0])
+    dev_err = np.array([1.0, 1.0, 1.0])
+
+    regions = summarize_adev_regions(tau, dev, dev_err, boundaries=(1.0,), agg="median")
+
+    assert len(regions) == 1
+    assert regions[0]["value"] == pytest.approx(20.0)
+
+
+def test_summarize_adev_regions_empty_region_omitted():
+    tau = np.array([0.1, 0.2])
+    dev = np.array([10.0, 20.0])
+    dev_err = np.array([1.0, 1.0])
+
+    regions = summarize_adev_regions(tau, dev, dev_err, boundaries=(0.25, 2.0))
+
+    assert len(regions) == 1
+    assert regions[0]["tau_max"] == 0.25
+
+
+def test_summarize_adev_regions_invalid_agg_raises():
+    with pytest.raises(ValueError):
+        summarize_adev_regions([0.1], [1.0], [0.1], agg="bogus")
+
+
+def test_summarize_adev_regions_nonpositive_boundary_raises():
+    with pytest.raises(ValueError):
+        summarize_adev_regions([0.1], [1.0], [0.1], boundaries=(0.0,))
+
+
+def test_summarize_adev_regions_default_boundaries():
+    rng = np.random.default_rng(3)
+    n = 4000
+    data = rng.normal(0, 1.0, n)
+    tau, dev, dev_err, _ = compute_oadev(data, rate=10.0, taus="octave")
+
+    regions = summarize_adev_regions(tau, dev, dev_err)
+
+    assert DEFAULT_ADEV_REGION_BOUNDARIES == (0.25, 2.0)
+    assert len(regions) == 3
+    assert sum(r["n"] for r in regions) == len(tau)
 
 
 def test_compute_psd_white_noise_level():

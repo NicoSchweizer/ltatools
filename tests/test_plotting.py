@@ -14,7 +14,7 @@ from ltatools.plotting import (
     plot_timeseries,
     psd_figure,
 )
-from ltatools.style import COLORS, darken_color
+from ltatools.style import COLORS, darken_color, finer_unit
 
 
 def _load_df(write_lta, **kwargs):
@@ -137,6 +137,92 @@ def test_plot_adev_save_with_external_ax(tmp_path):
     assert save_path.exists()
 
 
+def _region_test_data():
+    tau = np.array([0.1, 0.2, 1.0, 1.5, 5.0, 10.0])
+    dev = np.array([10.0, 20.0, 100.0, 200.0, 1000.0, 3000.0])
+    dev_err = np.array([1.0, 2.0, 5.0, 10.0, 50.0, 100.0])
+    return tau, dev, dev_err
+
+
+def test_plot_adev_regions_true_uses_default_boundaries():
+    tau, dev, dev_err = _region_test_data()
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", regions=True)
+
+    vlines = [line for line in ax.lines if line.get_linestyle() == ":"]
+    assert len(vlines) == 2
+    assert len(ax.texts) == 3
+
+
+def test_plot_adev_regions_custom_boundaries():
+    tau, dev, dev_err = _region_test_data()
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", regions=[0.5])
+
+    vlines = [line for line in ax.lines if line.get_linestyle() == ":"]
+    assert len(vlines) == 1
+    assert len(ax.texts) == 2
+
+
+def test_plot_adev_regions_requires_dev_err():
+    tau, dev, _ = _region_test_data()
+    with pytest.raises(ValueError):
+        plot_adev(tau, dev, None, unit="MHz", quantity="frequency", regions=True)
+
+
+def test_plot_adev_regions_median_agg_differs_from_mean():
+    from ltatools.analysis import summarize_adev_regions
+
+    # skewed first region (tau < 0.25) so mean and median genuinely differ
+    tau = np.array([0.1, 0.15, 0.2, 1.0, 5.0])
+    dev = np.array([10.0, 12.0, 100.0, 100.0, 1000.0])
+    dev_err = np.array([1.0, 1.0, 1.0, 5.0, 50.0])
+
+    mean_regions = summarize_adev_regions(tau, dev, dev_err, boundaries=(0.25, 2.0), agg="mean")
+    median_regions = summarize_adev_regions(tau, dev, dev_err, boundaries=(0.25, 2.0), agg="median")
+
+    assert mean_regions[0]["value"] != pytest.approx(median_regions[0]["value"])
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", regions=True, region_agg="median")
+    assert len(ax.texts) == 3
+
+
+def test_finer_unit_frequency_steps_down():
+    assert finer_unit("MHz", "frequency") == "kHz"
+    assert finer_unit("THz", "frequency") == "GHz"
+    assert finer_unit("Hz", "frequency") == "Hz"  # already finest
+
+
+def test_finer_unit_power_already_finest():
+    assert finer_unit("uW", "power") == "uW"
+    assert finer_unit("mW", "power") == "uW"
+    assert finer_unit("W", "power") == "mW"
+
+
+def test_finer_unit_unknown_quantity_unchanged():
+    assert finer_unit("nm", "wavelength") == "nm"
+
+
+def test_plot_adev_regions_labels_use_finer_unit():
+    tau, dev, dev_err = _region_test_data()
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", regions=True)
+
+    assert ax.get_ylabel().endswith("MHz")
+    for text in ax.texts:
+        assert "kHz" in text.get_text()
+        assert "MHz" not in text.get_text()
+
+
+def test_plot_adev_regions_labels_share_the_same_height():
+    tau, dev, dev_err = _region_test_data()
+
+    ax = plot_adev(tau, dev, dev_err, unit="MHz", quantity="frequency", regions=True)
+
+    heights = {text.xy[1] for text in ax.texts}
+    assert len(heights) == 1
+
+
 def test_plot_timeseries_save_creates_missing_dir(write_lta, tmp_path):
     df = _load_df(write_lta, n_points=50)
     save_path = tmp_path / "sub" / "timeseries.png"
@@ -202,6 +288,17 @@ def test_overview_figure_capsize_adds_endcaps(write_lta):
 
     assert len(ax_freq.containers[0].lines[1]) > 0
     assert len(ax_power.containers[0].lines[1]) > 0
+
+
+def test_overview_figure_regions_forwarded(write_lta):
+    df = _load_df(write_lta, n_points=2000)
+    fig, axes = overview_figure(df, taus="octave", regions=True)
+    _, ax_freq, ax_power = axes
+
+    for ax in (ax_freq, ax_power):
+        vlines = [line for line in ax.lines if line.get_linestyle() == ":"]
+        assert len(vlines) == 2
+        assert len(ax.texts) == 3
 
 
 def test_overview_figure_timeseries_power_unit_matches_adev_default(write_lta):
@@ -336,6 +433,15 @@ def test_plot_wrapper_save_nested_dir(write_lta, tmp_path):
 def test_plot_wrapper_adev_quantity_power(write_lta):
     df = _load_df(write_lta, n_points=200)
     assert plot(df, kind="adev", quantity="power", taus="octave") is None
+
+
+def test_plot_wrapper_adev_regions(write_lta):
+    df = _load_df(write_lta, n_points=2000)
+    result = plot(df, kind="adev", regions=True, taus="octave")
+
+    assert result is None
+    ax = plt.gcf().axes[0]
+    assert len(ax.texts) == 3
 
 
 def test_plot_wrapper_unknown_kind_raises(write_lta):

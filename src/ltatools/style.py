@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 import numpy as np
+import matplotlib as mpl
 import matplotlib.colors as mcolors
+
+# Slightly larger default text across every ltatools plot (titles, axis
+# labels, ticks, legend). Applied globally at import time since font size
+# isn't threaded through every plotting function individually.
+mpl.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 14,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 11,
+})
 
 COLORS = {
     "frequency": "tab:blue",
@@ -50,6 +63,46 @@ _QUANTITY_NAMES = {
     "wavelength": "Wavelength",
     "power": "Power",
 }
+
+# Coarse -> fine, so index + 1 is always "one step finer".
+_FREQUENCY_UNIT_ORDER = ["THz", "GHz", "MHz", "kHz", "Hz"]
+_POWER_UNIT_ORDER = ["W", "mW", "uW"]
+
+_UNIT_ORDERS = {
+    "frequency": _FREQUENCY_UNIT_ORDER,
+    "power": _POWER_UNIT_ORDER,
+}
+
+
+def finer_unit(unit, quantity):
+    """Return the next-finer unit than `unit` for `quantity`.
+
+    E.g. ``finer_unit("MHz", "frequency") == "kHz"``. Returns `unit`
+    unchanged if it is already the finest defined unit for `quantity`
+    (e.g. ``"uW"`` for power), or if `quantity` has no defined unit
+    ordering (e.g. ``"wavelength"``, which only ever uses ``"nm"``).
+
+    Parameters
+    ----------
+    unit : str
+        A unit recognized by `scale_frequency`/`scale_power`.
+    quantity : {"frequency", "wavelength", "power"}
+        Physical quantity `unit` belongs to.
+
+    Returns
+    -------
+    str
+    """
+    order = _UNIT_ORDERS.get(quantity)
+    if order is None:
+        return unit
+    normalized = "uW" if unit == "µW" else unit
+    if normalized not in order:
+        return unit
+    idx = order.index(normalized)
+    if idx + 1 >= len(order):
+        return unit
+    return order[idx + 1]
 
 
 def scale_frequency(values_THz, unit="THz"):

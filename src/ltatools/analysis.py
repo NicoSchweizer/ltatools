@@ -68,6 +68,93 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all")
     return tau, dev, dev_err, n
 
 
+DEFAULT_ADEV_REGION_BOUNDARIES = (0.25, 2.0)
+
+
+def summarize_adev_regions(tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOUNDARIES, agg="mean"):
+    """Aggregate Allan deviation values into τ regions (e.g. short/mid/long term).
+
+    Splits `tau` into ``len(boundaries) + 1`` half-open regions
+    ``[0, b_0), [b_0, b_1), ..., [b_n, inf)`` and reduces the `dev` values
+    falling into each region to a single value plus an error estimate.
+
+    The error is computed by propagating the individual `dev_err` values
+    of a region through quadrature, ``sqrt(sum(dev_err_i**2)) / n``,
+    rather than the sample standard deviation of the `dev` values in the
+    region. The Allan deviation typically has a real trend across a
+    region (e.g. it falls as ``tau**-0.5`` for white frequency noise), so
+    the spread of `dev` values there partly reflects that trend, not
+    measurement uncertainty — using it as an error bar would overstate
+    the true uncertainty. Propagating the already-computed per-tau
+    `dev_err` avoids that conflation. This propagated value is used as
+    the error estimate for both ``agg="mean"`` and ``agg="median"``; for
+    the median it is an approximation (the formally correct median error
+    would require e.g. a bootstrap estimate), but is used here for
+    simplicity.
+
+    Parameters
+    ----------
+    tau : array_like
+        Averaging times in seconds (e.g. from `compute_oadev`).
+    dev : array_like
+        Allan deviation values, same length as `tau`.
+    dev_err : array_like
+        Per-tau error of `dev` (e.g. `compute_oadev`'s `dev_err`), same
+        length as `tau`. Used for the error propagation described above.
+    boundaries : sequence of float, default (0.25, 2.0)
+        τ boundaries in seconds (need not be pre-sorted). ``k`` boundaries
+        produce ``k + 1`` regions.
+    agg : {"mean", "median"}, default "mean"
+        Aggregation statistic applied to `dev` within each region.
+
+    Returns
+    -------
+    list of dict
+        One dict per non-empty region, in ascending τ order, with keys
+        ``tau_min``, ``tau_max`` (floats in seconds; ``tau_max`` is
+        ``inf`` for the last region), ``value`` (the aggregated `dev`),
+        ``error`` (the propagated error of `value`), and ``n`` (number of
+        points in the region). Regions with no points are omitted.
+
+    Raises
+    ------
+    ValueError
+        If `agg` is not ``"mean"``/``"median"``, or if any `boundaries`
+        entry is not positive.
+
+    Examples
+    --------
+    >>> tau, dev, dev_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
+    >>> summarize_adev_regions(tau, dev, dev_err)
+    [{'tau_min': 0.0, 'tau_max': 0.25, 'value': 9.370167593610577e-08, 'error': 9.825484202459966e-10, 'n': 24}, {'tau_min': 0.25, 'tau_max': 2.0, 'value': 2.5384383336447446e-08, 'error': 1.18386558723204e-10, 'n': 175}, {'tau_min': 2.0, 'tau_max': inf, 'value': 9.804624969733248e-09, 'error': 2.463951327085816e-10, 'n': 50}]
+    """
+    if agg not in ("mean", "median"):
+        raise ValueError(f"Unknown agg {agg!r}; expected 'mean' or 'median'")
+
+    tau = np.asarray(tau)
+    dev = np.asarray(dev)
+    dev_err = np.asarray(dev_err)
+
+    boundaries = sorted(boundaries)
+    if any(b <= 0 for b in boundaries):
+        raise ValueError("boundaries must be positive")
+
+    edges = [0.0, *boundaries, np.inf]
+    agg_func = np.mean if agg == "mean" else np.median
+
+    regions = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        mask = (tau >= lo) & (tau < hi)
+        n = int(np.sum(mask))
+        if n == 0:
+            continue
+        value = float(agg_func(dev[mask]))
+        error = float(np.sqrt(np.sum(dev_err[mask] ** 2)) / n)
+        regions.append({"tau_min": lo, "tau_max": hi, "value": value, "error": error, "n": n})
+
+    return regions
+
+
 def compute_psd(data, *, rate=None, time_s=None, ci=None, nperseg=None, resample=True, jitter_tol=0.01):
     """Compute the one-sided Welch power spectral density of a data series.
 
