@@ -337,6 +337,85 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
     return ax
 
 
+_HIST_QUANTITY_DEFAULTS = {
+    "frequency": {"column": "frequency_THz", "unit": "MHz"},
+    "power": {"column": "power_uW", "unit": "uW"},
+    "wavelength": {"column": "wavelength_nm", "unit": "nm"},
+}
+
+
+def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, **hist_kwargs):
+    """Histogram of a single quantity's distribution.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame from ``load_lta_file`` or ``find_stable_segments``. Must
+        contain the column for `quantity` (``frequency_THz``,
+        ``power_uW``, or ``wavelength_nm``).
+    quantity : {"frequency", "power", "wavelength"}, default "frequency"
+        Physical quantity to histogram. Determines color, source column,
+        and default unit.
+    unit : str, optional
+        Target unit for the data; see `scale_frequency`/`scale_power`.
+        Defaults to ``"MHz"`` for frequency, ``"uW"`` for power, and
+        ``"nm"`` for wavelength.
+    bins : int or sequence or str, default 50
+        Passed to ``ax.hist``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw into. If omitted, a new figure is created.
+    save : str or pathlib.Path, optional
+        If given, the figure containing `ax` is saved as a 300 dpi PNG; the
+        parent directory is created if it does not exist. When an existing
+        `ax` was passed in, this saves the entire containing figure.
+    **hist_kwargs
+        Forwarded to ``ax.hist`` (e.g. ``density``, ``cumulative``,
+        ``histtype``, ``alpha``).
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+
+    Raises
+    ------
+    ValueError
+        If `quantity` is not recognized.
+
+    Examples
+    --------
+    >>> df = load_lta_file("scan.lta")
+    >>> plot_histogram(df, quantity="frequency", unit="MHz", save="hist_freq")
+    <Axes: title={'center': 'Frequency Histogram'}, xlabel='Frequency (MHz)', ylabel='Count'>
+    >>> plot_histogram(df, quantity="power", bins=100, density=True)
+    <Axes: title={'center': 'Power Histogram'}, xlabel='Power (uW)', ylabel='Count'>
+    """
+    if quantity not in _HIST_QUANTITY_DEFAULTS:
+        raise ValueError(
+            f"Unknown quantity {quantity!r}; expected one of {sorted(_HIST_QUANTITY_DEFAULTS)}"
+        )
+    defaults = _HIST_QUANTITY_DEFAULTS[quantity]
+    unit = unit if unit is not None else defaults["unit"]
+    scale = _quantity_scaler(quantity)
+    data = scale(df[defaults["column"]], unit)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 5))
+
+    ax.hist(data, bins=bins, color=COLORS[quantity], **hist_kwargs)
+    ax.set_title(f"{quantity.capitalize()} Histogram")
+    ax.set_xlabel(axis_label(quantity, unit))
+    ax.set_ylabel("Count")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    if save is not None:
+        fig = ax.get_figure()
+        save_path = Path(save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300)
+
+    return ax
+
+
 def overview_figure(
     df,
     *,
@@ -570,7 +649,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         Either a DataFrame from ``load_lta_file``/``find_stable_segments``,
         or a path to an ``.lta`` file (loaded internally via
         ``load_lta_file(data, cleanup=cleanup)``).
-    kind : {"overview", "psd", "timeseries", "adev", "spectrum"}, default "overview"
+    kind : {"overview", "psd", "timeseries", "adev", "spectrum", "hist"}, default "overview"
         Which plot to build:
 
         - ``"overview"`` — ``overview_figure``.
@@ -586,9 +665,13 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         - ``"spectrum"`` — PSD/ASD of a single column, computed via
           ``compute_psd`` and drawn via ``plot_psd``; `quantity` selects
           the column.
-    quantity : {"frequency", "power"}, default "frequency"
-        Column to use for ``kind="adev"``/``kind="spectrum"``. Ignored for
-        the other kinds.
+        - ``"hist"`` — Histogram of a single column's distribution, drawn
+          via ``plot_histogram``; `quantity` selects the column
+          (frequency, power, or wavelength).
+    quantity : {"frequency", "power", "wavelength"}, default "frequency"
+        Column to use for ``kind="adev"``/``kind="spectrum"`` (frequency
+        or power only) or ``kind="hist"`` (frequency, power, or
+        wavelength). Ignored for the other kinds.
     save : str or pathlib.Path, optional
         If given, the resulting figure is saved as a 300 dpi PNG. Treated
         as a name rather than a full path: if it has no file suffix,
@@ -621,6 +704,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     >>> plot(df, kind="adev", quantity="power")
     >>> plot(df, kind="psd", scaling="asd", save="figs/asd")
     >>> plot(df, kind="adev", regions=True)  # short/mid/long-term summary
+    >>> plot(df, kind="hist", quantity="wavelength", bins=100)
     """
     df = data if isinstance(data, pd.DataFrame) else load_lta_file(data, cleanup=cleanup)
 
@@ -656,9 +740,12 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         f, Pxx, *rest = compute_psd(series, time_s=df["time_s"], ci=ci, nperseg=nperseg)
         bounds = rest[0] if rest else None
         plot_psd(f, Pxx, ci_bounds=bounds, quantity=quantity, save=save_path, **kwargs)
+    elif kind == "hist":
+        plot_histogram(df, quantity=quantity, save=save_path, **kwargs)
     else:
         raise ValueError(
-            f"Unknown kind {kind!r}; expected one of 'overview', 'psd', 'timeseries', 'adev', 'spectrum'"
+            f"Unknown kind {kind!r}; expected one of "
+            "'overview', 'psd', 'timeseries', 'adev', 'spectrum', 'hist'"
         )
 
     return None
