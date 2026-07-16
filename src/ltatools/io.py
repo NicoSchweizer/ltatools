@@ -9,15 +9,40 @@ import pandas as pd
 from scipy.constants import c
 
 
-def _normalize_column(name: str) -> str:
-    """Normalize a raw .lta column header to a clean snake_case name."""
+_SIGNAL_RE = re.compile(r"^Signal\s+(\d+)\b\s*", re.IGNORECASE)
+
+
+def _normalize_column(name: str, canonical_signal: int = 1) -> str:
+    """Normalize a raw .lta column header to a clean snake_case name.
+
+    Columns prefixed with a "Signal N" other than `canonical_signal` are
+    kept distinct (``signal{N}_wavelength_nm`` etc.) instead of colliding
+    with the canonical ``wavelength_nm``/``power_uW`` names, since a .lta
+    file can log more than one wavemeter channel at once. `canonical_signal`
+    is chosen by `load_lta_file` as the lowest-numbered signal that actually
+    has wavelength data, since a channel can be present in the header but
+    left entirely empty if it wasn't connected during that recording.
+    """
     stripped = re.sub(r"\s+", " ", name.strip())
     if re.search(r"\btime\b", stripped, re.IGNORECASE) and "[ms]" in stripped:
         return "time_ms"
-    if re.search(r"wavelength", stripped, re.IGNORECASE):
-        return "wavelength_nm"
-    if re.search(r"power", stripped, re.IGNORECASE):
-        return "power_uW"
+
+    signal_match = _SIGNAL_RE.match(stripped)
+    signal_num = int(signal_match.group(1)) if signal_match else None
+    rest = stripped[signal_match.end():] if signal_match else stripped
+
+    if re.search(r"wavelength", rest, re.IGNORECASE):
+        base = "wavelength_nm"
+    elif re.search(r"power", rest, re.IGNORECASE):
+        base = "power_uW"
+    else:
+        base = None
+
+    if base is not None:
+        if signal_num is None or signal_num == canonical_signal:
+            return base
+        return f"signal{signal_num}_{base}"
+
     generic = re.sub(r"\[([^\]]+)\]", r"_\1", stripped)
     generic = re.sub(r"[^0-9a-zA-Z]+", "_", generic).strip("_").lower()
     return generic
@@ -60,7 +85,20 @@ def load_lta_file(file_path: str | Path, cleanup: bool = False) -> pd.DataFrame:
         skipinitialspace=True,
         encoding="cp1252",
     )
-    df.columns = [_normalize_column(col) for col in df.columns]
+    wavelength_cols_by_signal = {
+        int(m.group(1)): col
+        for col in df.columns
+        if (m := _SIGNAL_RE.match(col.strip())) and re.search(r"wavelength", col, re.IGNORECASE)
+    }
+    if wavelength_cols_by_signal:
+        populated = [n for n, col in sorted(wavelength_cols_by_signal.items()) if df[col].notna().any()]
+        canonical_signal = populated[0] if populated else min(wavelength_cols_by_signal)
+    else:
+        canonical_signal = 1
+    df.columns = [_normalize_column(col, canonical_signal) for col in df.columns]
+
+    if "wavelength_nm" not in df.columns:
+        raise ValueError(f"No wavelength column found in {path}")
 
     if cleanup:
         df = df[df["wavelength_nm"] > 0].reset_index(drop=True)
