@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 
 from .analysis import (
     DEFAULT_ADEV_REGION_BOUNDARIES,
@@ -257,11 +258,12 @@ def plot_adev(
             right = region["tau_max"] if np.isfinite(region["tau_max"]) else float(np.max(tau_arr[mask]))
             # log-scale x-axis: center in log-space (geometric mean), not linearly.
             tau_center = float(np.sqrt(left * right))
-            ax.annotate(
+            label = ax.annotate(
                 f"{region['value']:.2f} {region_unit}\n±{region['error']:.2f} {region_unit}",
                 xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
+            label.set_path_effects([pe.withStroke(linewidth=3, foreground="white")])
 
     if save is not None:
         fig = ax.get_figure()
