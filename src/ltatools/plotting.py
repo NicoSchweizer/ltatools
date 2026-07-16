@@ -180,8 +180,12 @@ def plot_adev(
         fixed height (see `_REGION_LABEL_Y` in this module, a fraction of
         the axes height from the bottom, so all region labels line up
         regardless of each region's data values — e.g. a "short/mid/long
-        term" summary, as in a typical frequency-stability plot). ``True``
-        uses ``analysis.DEFAULT_ADEV_REGION_BOUNDARIES``
+        term" summary, as in a typical frequency-stability plot).
+        Horizontally, each label is centered in log-space (geometric mean)
+        between its two region boundaries — falling back to the region's
+        extreme data τ on the outer side of the first/last region, where
+        no boundary line is drawn. ``True`` uses
+        ``analysis.DEFAULT_ADEV_REGION_BOUNDARIES``
         (0.25 s, 2 s); a sequence gives custom τ boundaries in seconds.
         Requires `dev_err` (used for error propagation — see below).
 
@@ -249,10 +253,13 @@ def plot_adev(
             tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
         ):
             mask = (tau_arr >= region["tau_min"]) & (tau_arr < region["tau_max"])
-            tau_center = float(np.median(tau_arr[mask]))
+            left = region["tau_min"] if region["tau_min"] > 0 else float(np.min(tau_arr[mask]))
+            right = region["tau_max"] if np.isfinite(region["tau_max"]) else float(np.max(tau_arr[mask]))
+            # log-scale x-axis: center in log-space (geometric mean), not linearly.
+            tau_center = float(np.sqrt(left * right))
             ax.annotate(
                 f"{region['value']:.2f} {region_unit}\n±{region['error']:.2f} {region_unit}",
-                xy=(tau_center-0.1, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
+                xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
 
