@@ -23,6 +23,33 @@ _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "µW"}
 _REGION_LABEL_Y = 0.5
 
 
+def _add_figure_label(fig, label):
+    """Stamp a large scenario label across the top of ``fig`` as a suptitle.
+
+    No-op when ``label`` is None (the default), so existing figures are
+    unchanged. When given, drawn via ``fig.suptitle`` at 22pt bold —
+    noticeably larger/heavier than the 14pt axes titles (``axes.titlesize``
+    in ``style.py``) so it reads as a stamp, not another title. matplotlib
+    reserves no suptitle space by default on either kind of figure this
+    module creates, so headroom is reserved explicitly: plain
+    ``plt.subplots`` figures (the single-panel functions) via
+    ``fig.subplots_adjust``; ``constrained_layout=True`` figures (the two
+    multi-panel functions) via their layout engine's ``rect``, since
+    calling ``subplots_adjust`` directly on a figure with a layout engine
+    is ignored. Either way this keeps the stamp clear of each panel's own
+    title and of the in-axes ``relative=True`` baseline text (drawn at
+    axes-fraction y=1.0).
+    """
+    if label is None:
+        return
+    fig.suptitle(str(label), fontsize=22, fontweight="bold", y=0.99, va="top")
+    engine = fig.get_layout_engine()
+    if engine is None:
+        fig.subplots_adjust(top=0.85)
+    else:
+        engine.set(rect=(0, 0, 1, 0.90))
+
+
 def _quantity_scaler(quantity):
     if quantity == "power":
         return scale_power
@@ -38,7 +65,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="µW", markersize=4, save=None, relative=False):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="µW", markersize=4, save=None, relative=False, label=None):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -88,6 +115,12 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         confusing. Ignored for the left axis when ``kind="wl"``
         (wavelength has no deviation view — only the power axis reacts).
         Defaults to False, leaving existing behavior unchanged.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        figure (via ``fig.suptitle``) — used to mark which measurement
+        scenario a saved figure belongs to. Rendered above and clear of
+        the panel title. Applies to the whole containing figure,
+        including one passed via `ax`. Defaults to None (no stamp).
 
     Returns
     -------
@@ -180,6 +213,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
 
     ax1.grid(True, which="both", ls="--", alpha=0.5)
 
+    _add_figure_label(ax1.get_figure(), label)
+
     if save is not None:
         fig = ax1.get_figure()
         save_path = Path(save)
@@ -191,7 +226,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
 
 def plot_adev(
     tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None,
-    errorbars=True, title=None, save=None, capsize=0, errorbar_color=None,
+    errorbars=True, title=None, save=None, label=None, capsize=0, errorbar_color=None,
     regions=None, region_agg="mean",
 ):
     """Log-log Allan deviation plot with error bars.
@@ -221,6 +256,12 @@ def plot_adev(
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
         `ax` was passed in, this saves the entire containing figure.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        figure (via ``fig.suptitle``) — used to mark which measurement
+        scenario a saved figure belongs to. Rendered above and clear of
+        `title`. Applies to the whole containing figure, including one
+        passed via `ax`. Defaults to None (no stamp).
     capsize : float, default 0
         Size of the error bar end caps, in points. ``0`` draws error bars
         without caps (the default); set e.g. ``capsize=3`` to add caps.
@@ -328,12 +369,14 @@ def plot_adev(
             right = region["tau_max"] if np.isfinite(region["tau_max"]) else float(np.max(tau_arr[mask]))
             # log-scale x-axis: center in log-space (geometric mean), not linearly.
             tau_center = float(np.sqrt(left * right))
-            label = ax.annotate(
+            region_label = ax.annotate(
                 f"{region['value']:.2f} {region_unit}\n±{region['error']:.2f} {region_unit}",
                 xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
-            label.set_path_effects([pe.withStroke(linewidth=3, foreground="white")])
+            region_label.set_path_effects([pe.withStroke(linewidth=3, foreground="white")])
+
+    _add_figure_label(ax.get_figure(), label)
 
     if save is not None:
         fig = ax.get_figure()
@@ -344,7 +387,7 @@ def plot_adev(
     return ax
 
 
-def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None, save=None):
+def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None, save=None, label=None):
     """Log-log power (or amplitude) spectral density plot with a confidence band.
 
     Parameters
@@ -369,6 +412,12 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
         `ax` was passed in, this saves the entire containing figure.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        figure (via ``fig.suptitle``) — used to mark which measurement
+        scenario a saved figure belongs to. Applies to the whole
+        containing figure, including one passed via `ax`. Defaults to
+        None (no stamp).
 
     Returns
     -------
@@ -407,6 +456,8 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
     ax.set_ylabel(psd_label(quantity, _PSD_QUANTITY_UNITS[quantity], scaling=scaling))
     ax.grid(True, which="both", ls="--", alpha=0.5)
 
+    _add_figure_label(ax.get_figure(), label)
+
     if save is not None:
         fig = ax.get_figure()
         save_path = Path(save)
@@ -423,7 +474,7 @@ _HIST_QUANTITY_DEFAULTS = {
 }
 
 
-def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, **hist_kwargs):
+def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, label=None, **hist_kwargs):
     """Histogram of a single quantity's distribution.
 
     Parameters
@@ -447,6 +498,12 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
         `ax` was passed in, this saves the entire containing figure.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        figure (via ``fig.suptitle``) — used to mark which measurement
+        scenario a saved figure belongs to. Rendered above and clear of
+        the panel title. Applies to the whole containing figure,
+        including one passed via `ax`. Defaults to None (no stamp).
     **hist_kwargs
         Forwarded to ``ax.hist`` (e.g. ``density``, ``cumulative``,
         ``histtype``, ``alpha``).
@@ -486,6 +543,8 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     ax.set_ylabel("Count")
     ax.grid(True, which="both", ls="--", alpha=0.5)
 
+    _add_figure_label(ax.get_figure(), label)
+
     if save is not None:
         fig = ax.get_figure()
         save_path = Path(save)
@@ -506,6 +565,7 @@ def overview_figure(
     errorbars=True,
     markersize=4,
     save=None,
+    label=None,
     capsize=0,
     errorbar_color=None,
     regions=None,
@@ -539,6 +599,11 @@ def overview_figure(
     save : str or pathlib.Path, optional
         If given, the figure is saved as a 300 dpi PNG; the parent
         directory is created if it does not exist.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        whole figure (via ``fig.suptitle``) — used to mark which
+        measurement scenario a saved figure belongs to. Rendered above
+        and clear of the panel titles. Defaults to None (no stamp).
     capsize : float, default 0
         Passed to ``plot_adev`` for both ADEV panels; ``0`` draws error
         bars without caps (the default), set e.g. ``capsize=3`` to add caps.
@@ -597,6 +662,8 @@ def overview_figure(
         regions=regions, region_agg=region_agg,
     )
 
+    _add_figure_label(fig, label)
+
     if save is not None:
         save_path = Path(save)
         save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -605,7 +672,7 @@ def overview_figure(
     return fig, [ax_ts, ax_freq, ax_power]
 
 
-def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
+def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None, label=None):
     """Separate PSD/ASD overview figure: frequency panel and power panel side by side.
 
     Not part of ``overview_figure`` — call this explicitly when a spectral
@@ -625,6 +692,11 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
     save : str or pathlib.Path, optional
         If given, the figure is saved as a 300 dpi PNG; the parent
         directory is created if it does not exist.
+    label : str, optional
+        If given, drawn as a large bold stamp across the top of the
+        whole figure (via ``fig.suptitle``) — used to mark which
+        measurement scenario a saved figure belongs to. Defaults to
+        None (no stamp).
 
     Returns
     -------
@@ -651,6 +723,8 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
     f_p, Pxx_p, *rest_p = power_result
     bounds_p = rest_p[0] if rest_p else None
     plot_psd(f_p, Pxx_p, ci_bounds=bounds_p, quantity="power", scaling=scaling, ax=ax_power)
+
+    _add_figure_label(fig, label)
 
     if save is not None:
         save_path = Path(save)
@@ -763,9 +837,11 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         Forwarded to the underlying plotting function for the chosen
         `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
         `unit`, `title`, `ax`, `capsize`, `errorbar_color`, `regions`,
-        `region_agg`, ...). For ``kind="adev"``/``kind="overview"``,
+        `region_agg`, `label`, ...). For ``kind="adev"``/``kind="overview"``,
         `regions`/`region_agg` add a short/mid/long-term (or custom)
-        τ-region summary to the ADEV panel(s) — see `plot_adev`.
+        τ-region summary to the ADEV panel(s) — see `plot_adev`. `label`
+        stamps a large bold scenario label across the top of the figure
+        — see any of the underlying plotting functions.
 
     Returns
     -------
@@ -784,6 +860,7 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     >>> plot(df, kind="psd", scaling="asd", save="figs/asd")
     >>> plot(df, kind="adev", regions=True)  # short/mid/long-term summary
     >>> plot(df, kind="hist", quantity="wavelength", bins=100)
+    >>> plot(df, kind="adev", quantity="power", label="Scenario A", save="fig/adev_A")
     """
     df = data if isinstance(data, pd.DataFrame) else load_lta_file(data, cleanup=cleanup)
 
