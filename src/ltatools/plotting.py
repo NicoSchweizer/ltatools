@@ -19,7 +19,7 @@ from .analysis import (
 from .io import load_lta_file
 from .style import COLORS, adev_label, axis_label, darken_color, finer_unit, psd_label, scale_frequency, scale_power
 
-_PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "uW"}
+_PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "µW"}
 _REGION_LABEL_Y = 0.5
 
 
@@ -38,7 +38,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4, save=None, relative=False):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="µW", markersize=4, save=None, relative=False):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -57,7 +57,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     freq_unit : str, default "THz"
         Target unit for the left axis when ``kind="freq"``; see
         `scale_frequency`. Ignored when ``kind="wl"``.
-    power_unit : str, default "uW"
+    power_unit : str, default "µW"
         Target unit for the right (power) axis; see `scale_power`.
     markersize : float, default 4
         Marker size for both series.
@@ -67,16 +67,26 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         existing `ax` was passed in, this saves the entire containing
         figure.
     relative : bool, default False
-        If True (only valid for ``kind="freq"``), plot the frequency
-        *deviation from its own mean* instead of the absolute frequency:
-        ``mean(frequency_THz)`` is subtracted in native THz (before scaling
-        to `freq_unit`, avoiding the precision loss from subtracting a
-        scaled ~1e8 MHz mean), so the left axis reads small ± deviations
-        around zero — useful for inspecting relative frequency stability.
-        The subtracted baseline is shown as a ``"<value> THz"`` label at
-        the top-left of the axis (replacing matplotlib's unitless
-        scientific-notation offset with a physically meaningful one), and
-        the y-axis label gains a ``Δ`` prefix (e.g. ``"Δ Frequency (MHz)"``).
+        If True, plot the power axis (and the frequency axis, when
+        ``kind="freq"``) as *deviation from its own mean* instead of its
+        absolute value: ``mean(power_uW)`` (and ``mean(frequency_THz)``)
+        is subtracted in each quantity's native unit (µW / THz) before
+        scaling to `power_unit`/`freq_unit`, so each axis reads small ±
+        deviations around zero — useful for inspecting relative stability.
+        Each subtracted baseline is shown as a label near the top of its
+        axis (frequency top-left, power top-right), replacing
+        matplotlib's unitless scientific-notation offset with a
+        physically meaningful one, and the corresponding y-axis label
+        gains a ``Δ`` prefix (e.g. ``"Δ Frequency (MHz)"``, ``"Δ Power
+        (µW)"``). The frequency baseline is always shown in THz
+        regardless of `freq_unit`, since frequency units span many
+        orders of magnitude (THz vs. kHz) and that mismatch is exactly
+        the unitless-offset problem being fixed; the power baseline is
+        shown in `power_unit` itself, matching the power axis, since
+        power units (µW/mW/W) don't have that same huge-offset problem
+        and showing a different unit than the axis would just be
+        confusing. Ignored for the left axis when ``kind="wl"``
+        (wavelength has no deviation view — only the power axis reacts).
         Defaults to False, leaving existing behavior unchanged.
 
     Returns
@@ -87,19 +97,15 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     Raises
     ------
     ValueError
-        If `kind` is not ``"freq"`` or ``"wl"``, or if ``relative=True`` is
-        combined with ``kind="wl"`` (relative deviation is frequency-only).
+        If `kind` is not ``"freq"`` or ``"wl"``.
 
     Examples
     --------
     >>> df = load_lta_file("scan.lta")
     >>> plot_timeseries(df, kind="freq", freq_unit="MHz", save="timeseries")
-    (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (uW)'>)
+    (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (µW)'>)
     >>> plot_timeseries(df, kind="freq", freq_unit="kHz", relative=True)  # relative stability
     """
-    if relative and kind != "freq":
-        raise ValueError("relative=True is only supported for kind='freq'")
-
     fmt = "x-" if lines else "x"
 
     if ax is None:
@@ -112,14 +118,30 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     ax2.set_zorder(1)
     ax1.patch.set_visible(False)
 
-    power_scaled = scale_power(df["power_uW"], power_unit)
+    if relative:
+        # subtract the mean in native uW *before* scaling (mirrors the frequency
+        # baseline below), but — unlike frequency, which is always shown in the
+        # fixed native THz — display the baseline in `power_unit` itself: power
+        # units don't span the many orders of magnitude frequency units do, so
+        # there's no huge-offset problem to fix, and matching the axis unit
+        # keeps the baseline label directly comparable to the plotted values.
+        baseline_uW = float(df["power_uW"].mean())
+        power_scaled = scale_power(df["power_uW"] - baseline_uW, power_unit)
+    else:
+        power_scaled = scale_power(df["power_uW"], power_unit)
     ax2.plot(
         df["time_s"], power_scaled, fmt, color=COLORS["power"],
-        markersize=markersize, label=axis_label("power", power_unit),
+        markersize=markersize, label=axis_label("power", power_unit, delta=relative),
     )
-    ax2.set_ylabel(axis_label("power", power_unit), color=COLORS["power"])
+    ax2.set_ylabel(axis_label("power", power_unit, delta=relative), color=COLORS["power"])
     ax2.tick_params(axis="y", labelcolor=COLORS["power"])
     ax2.margins(y=0.1)
+    if relative:
+        baseline_power_display = float(scale_power(baseline_uW, power_unit))
+        ax2.text(
+            1.0, 1.0, f"{baseline_power_display:.6g} {power_unit}",
+            transform=ax2.transAxes, ha="right", va="bottom", color="0.2",
+        )
 
     if kind == "wl":
         quantity, unit, title = "wavelength", "nm", "Wavelength and Power over time"
@@ -396,7 +418,7 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
 
 _HIST_QUANTITY_DEFAULTS = {
     "frequency": {"column": "frequency_THz", "unit": "MHz"},
-    "power": {"column": "power_uW", "unit": "uW"},
+    "power": {"column": "power_uW", "unit": "µW"},
     "wavelength": {"column": "wavelength_nm", "unit": "nm"},
 }
 
@@ -415,7 +437,7 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
         and default unit.
     unit : str, optional
         Target unit for the data; see `scale_frequency`/`scale_power`.
-        Defaults to ``"MHz"`` for frequency, ``"uW"`` for power, and
+        Defaults to ``"MHz"`` for frequency, ``"µW"`` for power, and
         ``"nm"`` for wavelength.
     bins : int or sequence or str, default 50
         Passed to ``ax.hist``.
@@ -444,7 +466,7 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     >>> plot_histogram(df, quantity="frequency", unit="MHz", save="hist_freq")
     <Axes: title={'center': 'Frequency Histogram'}, xlabel='Frequency (MHz)', ylabel='Count'>
     >>> plot_histogram(df, quantity="power", bins=100, density=True)
-    <Axes: title={'center': 'Power Histogram'}, xlabel='Power (uW)', ylabel='Count'>
+    <Axes: title={'center': 'Power Histogram'}, xlabel='Power (µW)', ylabel='Count'>
     """
     if quantity not in _HIST_QUANTITY_DEFAULTS:
         raise ValueError(
@@ -478,7 +500,7 @@ def overview_figure(
     *,
     kind="freq",
     freq_unit="MHz",
-    power_unit="uW",
+    power_unit="µW",
     taus="octave",
     lines=False,
     errorbars=True,
@@ -500,7 +522,7 @@ def overview_figure(
     freq_unit : str, default "MHz"
         Unit for the timeseries frequency axis (when ``kind="freq"``) and
         the frequency ADEV panel.
-    power_unit : str, default "uW"
+    power_unit : str, default "µW"
         Unit for the timeseries power axis and the power ADEV panel.
     taus : str or numpy.ndarray, default "octave"
         Averaging times passed to ``compute_oadev``. ``"octave"`` (powers of
@@ -544,7 +566,7 @@ def overview_figure(
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = overview_figure(df, freq_unit="kHz", errorbars=False, save="overview")
     >>> axes
-    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in kHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in uW'>]
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in kHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in µW'>]
     >>> fig, axes = overview_figure(df, capsize=3)  # with end caps
     >>> fig, axes = overview_figure(df, regions=True)  # short/mid/long-term summary
     """
@@ -615,7 +637,7 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None):
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = psd_figure(df, scaling="asd", ci=0.95, save="psd")
     >>> axes
-    [<Axes: xlabel='Frequency (Hz)', ylabel='ASD in Hz/$\\sqrt{\\mathrm{Hz}}$'>, <Axes: xlabel='Frequency (Hz)', ylabel='ASD in uW/$\\sqrt{\\mathrm{Hz}}$'>]
+    [<Axes: xlabel='Frequency (Hz)', ylabel='ASD in Hz/$\\sqrt{\\mathrm{Hz}}$'>, <Axes: xlabel='Frequency (Hz)', ylabel='ASD in µW/$\\sqrt{\\mathrm{Hz}}$'>]
     """
     fig, (ax_freq, ax_power) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
@@ -669,7 +691,7 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
     --------
     >>> fig, axes = lta_overview("scan.lta")
     >>> axes
-    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in uW'>]
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in µW'>]
     >>> results = lta_overview("scan.lta", segments=True, n_segments=2)
     >>> len(results)
     2
@@ -683,7 +705,7 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
 
 _ADEV_QUANTITY_DEFAULTS = {
     "frequency": {"column": "frequency_THz", "unit": "MHz", "title": "Frequency Allan Deviation"},
-    "power": {"column": "power_uW", "unit": "uW", "title": "Power Allan Deviation"},
+    "power": {"column": "power_uW", "unit": "µW", "title": "Power Allan Deviation"},
 }
 
 _SPECTRUM_QUANTITY_COLUMNS = {

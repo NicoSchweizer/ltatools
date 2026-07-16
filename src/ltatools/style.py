@@ -66,7 +66,7 @@ _QUANTITY_NAMES = {
 
 # Coarse -> fine, so index + 1 is always "one step finer".
 _FREQUENCY_UNIT_ORDER = ["THz", "GHz", "MHz", "kHz", "Hz"]
-_POWER_UNIT_ORDER = ["W", "mW", "uW"]
+_POWER_UNIT_ORDER = ["W", "mW", "µW"]
 
 _UNIT_ORDERS = {
     "frequency": _FREQUENCY_UNIT_ORDER,
@@ -96,7 +96,7 @@ def finer_unit(unit, quantity):
     order = _UNIT_ORDERS.get(quantity)
     if order is None:
         return unit
-    normalized = "uW" if unit == "µW" else unit
+    normalized = "µW" if unit == "uW" else unit
     if normalized not in order:
         return unit
     idx = order.index(normalized)
