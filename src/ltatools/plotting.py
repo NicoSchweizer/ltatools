@@ -38,7 +38,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4, save=None):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="uW", markersize=4, save=None, relative=False):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -66,18 +66,40 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         the parent directory is created if it does not exist. When an
         existing `ax` was passed in, this saves the entire containing
         figure.
+    relative : bool, default False
+        If True (only valid for ``kind="freq"``), plot the frequency
+        *deviation from its own mean* instead of the absolute frequency:
+        ``mean(frequency_THz)`` is subtracted in native THz (before scaling
+        to `freq_unit`, avoiding the precision loss from subtracting a
+        scaled ~1e8 MHz mean), so the left axis reads small ± deviations
+        around zero — useful for inspecting relative frequency stability.
+        The subtracted baseline is shown as a ``"<value> THz"`` label at
+        the top-left of the axis (replacing matplotlib's unitless
+        scientific-notation offset with a physically meaningful one), and
+        the y-axis label gains a ``Δ`` prefix (e.g. ``"Δ Frequency (MHz)"``).
+        Defaults to False, leaving existing behavior unchanged.
 
     Returns
     -------
     ax_left, ax_right : matplotlib.axes.Axes
         The frequency/wavelength axis and the power axis.
 
+    Raises
+    ------
+    ValueError
+        If `kind` is not ``"freq"`` or ``"wl"``, or if ``relative=True`` is
+        combined with ``kind="wl"`` (relative deviation is frequency-only).
+
     Examples
     --------
     >>> df = load_lta_file("scan.lta")
     >>> plot_timeseries(df, kind="freq", freq_unit="MHz", save="timeseries")
     (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (uW)'>)
+    >>> plot_timeseries(df, kind="freq", freq_unit="kHz", relative=True)  # relative stability
     """
+    if relative and kind != "freq":
+        raise ValueError("relative=True is only supported for kind='freq'")
+
     fmt = "x-" if lines else "x"
 
     if ax is None:
@@ -104,19 +126,31 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         left_data = df["wavelength_nm"]
     elif kind == "freq":
         quantity, unit, title = "frequency", freq_unit, "Frequency and Power over time"
-        left_data = scale_frequency(df["frequency_THz"], freq_unit)
+        if relative:
+            # subtract the mean in native THz *before* scaling — subtracting a
+            # scaled ~1e8 MHz mean afterwards would lose precision to cancellation.
+            baseline_THz = float(df["frequency_THz"].mean())
+            left_data = scale_frequency(df["frequency_THz"] - baseline_THz, freq_unit)
+        else:
+            left_data = scale_frequency(df["frequency_THz"], freq_unit)
     else:
         raise ValueError(f"Unknown kind {kind!r}; expected 'freq' or 'wl'")
 
+    delta = kind == "freq" and relative
     ax1.plot(
         df["time_s"], left_data, fmt, color=COLORS[quantity],
-        markersize=markersize, label=axis_label(quantity, unit),
+        markersize=markersize, label=axis_label(quantity, unit, delta=delta),
     )
     ax1.set_title(title)
-    ax1.set_ylabel(axis_label(quantity, unit), color=COLORS[quantity])
+    ax1.set_ylabel(axis_label(quantity, unit, delta=delta), color=COLORS[quantity])
     ax1.tick_params(axis="y", labelcolor=COLORS[quantity])
     ax1.margins(y=0.1)
     ax1.set_xlabel("Time (s)")
+    if delta:
+        ax1.text(
+            0.0, 1.0, f"{baseline_THz:.7f} THz",
+            transform=ax1.transAxes, ha="left", va="bottom", color="0.2",
+        )
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
@@ -203,6 +237,13 @@ def plot_adev(
         The annotated value/error are shown in a unit one step finer than
         `unit` (see `style.finer_unit`), e.g. in kHz when ``unit="MHz"`` —
         the axis itself stays in `unit`.
+
+        Each region boundary τ is additionally drawn as a labeled minor
+        tick on the x-axis (e.g. ``0.25``, ``2``) so its exact value can be
+        read directly off the axis rather than inferred against the decade
+        gridlines. These labeled boundary ticks take over the x-axis minor
+        tick level, replacing matplotlib's default (unlabeled) log-scale
+        minor ticks for this plot.
     region_agg : {"mean", "median"}, default "mean"
         Aggregation statistic used within each region when `regions` is
         given. Ignored otherwise.
@@ -248,8 +289,15 @@ def plot_adev(
         dev_region_scaled = scale(dev, region_unit)
         dev_err_region_scaled = scale(dev_err, region_unit)
         tau_arr = np.asarray(tau)
-        for boundary in sorted(boundaries):
+        sorted_boundaries = sorted(boundaries)
+        for boundary in sorted_boundaries:
             ax.axvline(boundary, color="gray", linestyle="--", linewidth=1.5)
+        # Label each boundary directly on the x-axis, on the minor-tick level
+        # (replaces matplotlib's default unlabeled log minor ticks for this
+        # plot; the decade major ticks remain the primary reference).
+        ax.set_xticks(sorted_boundaries, labels=[f"{b:g}" for b in sorted_boundaries], minor=True)
+        ax.tick_params(axis="x", which="minor", length=6, width=1.5, color="gray", labelcolor="gray")
+        ax.grid(False, axis="x", which="minor")
         for region in summarize_adev_regions(
             tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
         ):

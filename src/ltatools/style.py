@@ -159,7 +159,7 @@ def scale_power(values_uW, unit="uW"):
     return np.asarray(values_uW) * _POWER_FACTORS[unit]
 
 
-def axis_label(quantity, unit):
+def axis_label(quantity, unit, delta=False):
     """Build an axis label for a quantity/unit pair.
 
     Parameters
@@ -168,6 +168,10 @@ def axis_label(quantity, unit):
         Physical quantity being labeled.
     unit : str
         Unit string, e.g. ``"MHz"`` or ``"nm"``.
+    delta : bool, default False
+        If True, prefix the label with ``Δ`` to denote a deviation from a
+        reference (e.g. ``"Δ Frequency (MHz)"``) rather than an absolute
+        value. Used by `plotting.plot_timeseries` with ``relative=True``.
 
     Returns
     -------
@@ -183,7 +187,10 @@ def axis_label(quantity, unit):
         raise ValueError(
             f"Unknown quantity {quantity!r}; expected one of {sorted(_QUANTITY_NAMES)}"
         )
-    return f"{_QUANTITY_NAMES[quantity]} ({unit})"
+    name = _QUANTITY_NAMES[quantity]
+    if delta:
+        return f"Δ {name} ({unit})"
+    return f"{name} ({unit})"
 
 
 def adev_label(quantity, unit):
