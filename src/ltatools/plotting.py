@@ -373,6 +373,7 @@ def plot_adev(
         # instead style each boundary tick individually (taller/gray/labeled) so
         # it reads as an intentional annotation, leaving the default sub-ticks in
         # matplotlib's normal style (short, default color, unlabeled).
+        xlim = ax.get_xlim()
         default_minor = list(ax.get_xticks(minor=True))
         combined_minor = sorted(set(default_minor) | set(sorted_boundaries))
         minor_labels = [
@@ -380,6 +381,11 @@ def plot_adev(
             for pos in combined_minor
         ]
         ax.set_xticks(combined_minor, labels=minor_labels, minor=True)
+        # set_xticks widens the view to fit every tick it's given (the default
+        # sub-ticks span full decades touching the data, not just the tight
+        # autoscaled range) — restore the original x-range so the plot doesn't
+        # zoom out to show mostly-empty decades.
+        ax.set_xlim(xlim)
         for tick, pos in zip(ax.xaxis.get_minor_ticks(), combined_minor):
             if any(np.isclose(pos, b) for b in sorted_boundaries):
                 for line in (tick.tick1line, tick.tick2line):
