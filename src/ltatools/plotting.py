@@ -24,15 +24,48 @@ _REGION_LABEL_Y = 0.5
 _THIN_SPACE = " "
 
 
-def _format_grouped(value, decimals, group=3, sep=_THIN_SPACE):
-    """Format `value` to `decimals` fractional digits, with `sep` every
-    `group` digits after the decimal point for readability, e.g.
-    ``"268.123 456 7"``. A thin space (not a comma) avoids collision with
-    the comma-as-decimal-separator convention used in some locales.
+def _group_digits(digits, group, sep, from_left):
+    """Insert `sep` every `group` characters of `digits`.
+
+    ``from_left=True`` groups starting at index 0 (for fractional digits);
+    ``from_left=False`` groups starting from the end (for integer digits,
+    i.e. a conventional thousands separator).
     """
-    integer_part, _, frac_part = f"{value:.{decimals}f}".partition(".")
-    grouped_frac = sep.join(frac_part[i : i + group] for i in range(0, len(frac_part), group))
-    return f"{integer_part}.{grouped_frac}"
+    if from_left:
+        chunks = [digits[i : i + group] for i in range(0, len(digits), group)]
+    else:
+        reversed_digits = digits[::-1]
+        chunks = [chunk[::-1] for chunk in (reversed_digits[i : i + group] for i in range(0, len(reversed_digits), group))]
+        chunks.reverse()
+    return sep.join(chunks)
+
+
+def _format_grouped_str(text, group=3, sep=_THIN_SPACE):
+    """Group the digits of an already-formatted fixed-point number string
+    in triples with `sep` on both sides of the decimal point, e.g.
+    ``"268.123 456 7"`` (grouped fraction) or ``"55 992.39"`` (grouped
+    integer part). A thin space (not a comma) avoids collision with the
+    comma-as-decimal-separator convention used in some locales.
+
+    Left unchanged if `text` is in scientific notation (contains ``e``);
+    grouping a coefficient/exponent pair does not make sense.
+    """
+    if "e" in text or "E" in text:
+        return text
+    sign, text = ("-", text[1:]) if text.startswith("-") else ("", text)
+    integer_part, _, frac_part = text.partition(".")
+    grouped_int = _group_digits(integer_part, group, sep, from_left=False)
+    if not frac_part:
+        return f"{sign}{grouped_int}"
+    grouped_frac = _group_digits(frac_part, group, sep, from_left=True)
+    return f"{sign}{grouped_int}.{grouped_frac}"
+
+
+def _format_grouped(value, decimals, group=3, sep=_THIN_SPACE):
+    """Format `value` to `decimals` fractional digits, then group its
+    digits via `_format_grouped_str`.
+    """
+    return _format_grouped_str(f"{value:.{decimals}f}", group=group, sep=sep)
 
 
 def _add_figure_label(fig, label):
@@ -129,7 +162,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         shown in `power_unit` itself, matching the power axis, since
         power units (µW/mW/W) don't have that same huge-offset problem
         and showing a different unit than the axis would just be
-        confusing. Ignored for the left axis when ``kind="wl"``
+        confusing — its digits are grouped the same way, whenever it has
+        enough of them to matter. Ignored for the left axis when ``kind="wl"``
         (wavelength has no deviation view — only the power axis reacts).
         Defaults to False, leaving existing behavior unchanged.
     label : str, optional
@@ -191,7 +225,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     if relative:
         baseline_power_display = float(scale_power(baseline_uW, power_unit))
         ax2.text(
-            1.0, 1.0, f"{baseline_power_display:.6g} {power_unit}",
+            1.0, 1.0, f"{_format_grouped_str(f'{baseline_power_display:.6g}')} {power_unit}",
             transform=ax2.transAxes, ha="right", va="bottom", color="0.2",
         )
 
@@ -322,7 +356,10 @@ def plot_adev(
 
         The annotated value/error are shown in a unit one step finer than
         `unit` (see `style.finer_unit`), e.g. in kHz when ``unit="MHz"`` —
-        the axis itself stays in `unit`.
+        the axis itself stays in `unit`. Both numbers are formatted with
+        their digits grouped in triples by a thin space on either side of
+        the decimal point (e.g. ``"55 992.39"``), matching the baseline
+        formatting used by `plot_timeseries` with ``relative=True``.
 
         Each region boundary τ is additionally drawn as a labeled minor
         tick on the x-axis (e.g. ``0.25``, ``2``) so its exact value can be
@@ -420,7 +457,8 @@ def plot_adev(
             # log-scale x-axis: center in log-space (geometric mean), not linearly.
             tau_center = float(np.sqrt(left * right))
             region_label = ax.annotate(
-                f"{region['value']:.2f} {region_unit}\n±{region['error']:.2f} {region_unit}",
+                f"{_format_grouped(region['value'], decimals=2)} {region_unit}\n"
+                f"±{_format_grouped(region['error'], decimals=2)} {region_unit}",
                 xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
@@ -524,7 +562,9 @@ _HIST_QUANTITY_DEFAULTS = {
 }
 
 
-def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, label=None, **hist_kwargs):
+def plot_histogram(
+    df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, relative=False, label=None, **hist_kwargs
+):
     """Histogram of a single quantity's distribution.
 
     Parameters
@@ -548,6 +588,29 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
         `ax` was passed in, this saves the entire containing figure.
+    relative : bool, default False
+        If True, histogram *deviation from the mean* instead of the
+        absolute value: ``mean(quantity)`` is subtracted in the
+        quantity's native unit before scaling to `unit`, so the
+        histogram is centered on zero — the same treatment
+        `plot_timeseries` gives its axes with ``relative=True``, useful
+        here for the same reason (frequency in particular has no
+        reasonably-sized absolute unit; MHz/kHz histograms of an
+        absolute optical frequency are all huge, nearly-identical
+        numbers). The subtracted baseline is shown as a plain value/unit
+        label near the top-left of the axes, and the x-axis label
+        becomes a deviation label using the quantity's physics symbol
+        (e.g. ``"Frequency deviation Δν (MHz)"``). The frequency
+        baseline is always shown in THz regardless of `unit`, for the
+        same huge-offset reason as in `plot_timeseries`; power and
+        wavelength baselines are shown in `unit` itself. Either way the
+        baseline's digits are grouped in triples with a thin space (e.g.
+        ``"268.123 456 7 THz"``), matching `plot_timeseries`. Defaults
+        to False, leaving existing behavior unchanged. When left False
+        for ``quantity="frequency"``, matplotlib's own scientific-notation
+        offset annotation (which it adds automatically for the huge,
+        tightly-clustered absolute values) is replaced the same way, in
+        THz with grouped digits, without otherwise changing the plot.
     label : str, optional
         If given, drawn as a large bold stamp across the top of the
         figure (via ``fig.suptitle``) — used to mark which measurement
@@ -573,9 +636,9 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     --------
     >>> df = load_lta_file("scan.lta")
     >>> plot_histogram(df, quantity="frequency", unit="MHz", save="hist_freq")
-    <Axes: title={'center': 'Frequency Histogram'}, xlabel='Frequency (MHz)', ylabel='Count'>
+    <Axes: title={'center': 'Frequency Histogram'}, xlabel='Frequency (MHz)', ylabel='Frequency (n)'>
     >>> plot_histogram(df, quantity="power", bins=100, density=True)
-    <Axes: title={'center': 'Power Histogram'}, xlabel='Power (µW)', ylabel='Count'>
+    <Axes: title={'center': 'Power Histogram'}, xlabel='Power (µW)', ylabel='Frequency (n)'>
     """
     if quantity not in _HIST_QUANTITY_DEFAULTS:
         raise ValueError(
@@ -584,7 +647,13 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     defaults = _HIST_QUANTITY_DEFAULTS[quantity]
     unit = unit if unit is not None else defaults["unit"]
     scale = _quantity_scaler(quantity)
-    data = scale(df[defaults["column"]], unit)
+    raw = df[defaults["column"]]
+
+    if relative:
+        baseline_native = float(raw.mean())
+        data = scale(raw - baseline_native, unit)
+    else:
+        data = scale(raw, unit)
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
@@ -592,9 +661,48 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     ax.hist(data, bins=bins, color=COLORS[quantity], **hist_kwargs)
     if label is None:
         ax.set_title(f"{quantity.capitalize()} Histogram")
-    ax.set_xlabel(axis_label(quantity, unit))
-    ax.set_ylabel("Count")
+    ax.set_xlabel(axis_label(quantity, unit, delta=relative))
+    ax.set_ylabel("Frequency (n)")
     ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    if relative:
+        if quantity == "frequency":
+            baseline_text = f"{_format_grouped(baseline_native, decimals=7)} THz"
+        else:
+            baseline_display = float(scale(np.array([baseline_native]), unit)[0])
+            baseline_text = f"{_format_grouped_str(f'{baseline_display:.6g}')} {unit}"
+        ax.text(
+            0.0, 1.0, baseline_text,
+            transform=ax.transAxes, ha="left", va="bottom", color="0.2",
+        )
+    elif quantity == "frequency":
+        # matplotlib auto-detects that the (huge, tightly-clustered)
+        # absolute frequency values need a shared offset, and prints it
+        # as its own unitless scientific-notation corner label (e.g.
+        # "+2.68096e8") — the same problem `relative=True` fixes by
+        # subtracting the mean up front. Here the ticks/offset split is
+        # entirely matplotlib's own, so instead of pre-empting it we let
+        # it compute its offset (forcing a draw, since ScalarFormatter
+        # resolves it lazily at render time), read that exact value back
+        # via the formatter's `offset` attribute (not by parsing the
+        # rendered string, which would lose precision), and replace the
+        # default text with our physically meaningful, grouped-digit THz
+        # equivalent — the ticks themselves are untouched.
+        ax.get_figure().canvas.draw()
+        offset_display = float(ax.xaxis.get_major_formatter().offset)
+        if offset_display != 0:
+            offset_THz = offset_display / float(scale_frequency(1.0, unit))
+            offset_artist = ax.xaxis.get_offset_text()
+            offset_artist.set_visible(False)
+            # Reuse the hidden artist's own (already draw-computed)
+            # position/transform/alignment rather than guessing
+            # coordinates, so our replacement lands exactly where
+            # matplotlib's own offset text would have been drawn.
+            ax.text(
+                *offset_artist.get_position(), f"{_format_grouped(offset_THz, decimals=7)} THz",
+                transform=offset_artist.get_transform(),
+                ha=offset_artist.get_ha(), va=offset_artist.get_va(), color="0.2",
+            )
 
     _add_figure_label(ax.get_figure(), label)
 
@@ -890,9 +998,12 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         Forwarded to the underlying plotting function for the chosen
         `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
         `unit`, `title`, `ax`, `capsize`, `errorbar_color`, `regions`,
-        `region_agg`, `label`, ...). For ``kind="adev"``/``kind="overview"``,
-        `regions`/`region_agg` add a short/mid/long-term (or custom)
-        τ-region summary to the ADEV panel(s) — see `plot_adev`. `label`
+        `region_agg`, `relative`, `label`, ...). For
+        ``kind="adev"``/``kind="overview"``, `regions`/`region_agg` add a
+        short/mid/long-term (or custom) τ-region summary to the ADEV
+        panel(s) — see `plot_adev`. `relative` centers `kind="timeseries"`
+        or `kind="hist"` on their own mean instead of showing the
+        absolute value — see `plot_timeseries`/`plot_histogram`. `label`
         stamps a large bold scenario label across the top of the figure
         — see any of the underlying plotting functions.
 
