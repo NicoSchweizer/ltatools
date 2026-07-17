@@ -310,9 +310,10 @@ def plot_adev(
         Each region boundary τ is additionally drawn as a labeled minor
         tick on the x-axis (e.g. ``0.25``, ``2``) so its exact value can be
         read directly off the axis rather than inferred against the decade
-        gridlines. These labeled boundary ticks take over the x-axis minor
-        tick level, replacing matplotlib's default (unlabeled) log-scale
-        minor ticks for this plot.
+        gridlines. These boundary ticks are styled distinctly (taller and
+        gray, with a label) and are added alongside matplotlib's default
+        unlabeled log-scale minor ticks (the 2-9 sub-ticks per decade),
+        which remain in their normal short, unlabeled style.
     region_agg : {"mean", "median"}, default "mean"
         Aggregation statistic used within each region when `regions` is
         given. Ignored otherwise.
@@ -361,12 +362,32 @@ def plot_adev(
         sorted_boundaries = sorted(boundaries)
         for boundary in sorted_boundaries:
             ax.axvline(boundary, color="gray", linestyle="--", linewidth=1.5)
-        # Label each boundary directly on the x-axis, on the minor-tick level
-        # (replaces matplotlib's default unlabeled log minor ticks for this
-        # plot; the decade major ticks remain the primary reference).
-        ax.set_xticks(sorted_boundaries, labels=[f"{b:g}" for b in sorted_boundaries], minor=True)
-        ax.tick_params(axis="x", which="minor", length=6, width=1.5, color="gray", labelcolor="gray")
-        ax.grid(False, axis="x", which="minor")
+        # Label each region boundary directly on the x-axis so its exact τ can
+        # be read off the axis, *without* discarding matplotlib's default
+        # unlabeled log-scale minor ticks (the 2-9 sub-ticks per decade). There
+        # is only one minor locator per axis, so capture the default minor-tick
+        # positions first (the errorbar() above already set real x-limits, so
+        # the log locator returns sensible sub-ticks), then install a combined
+        # fixed set — default sub-ticks plus the boundaries — labeling only the
+        # boundaries. tick_params would style the whole minor level at once, so
+        # instead style each boundary tick individually (taller/gray/labeled) so
+        # it reads as an intentional annotation, leaving the default sub-ticks in
+        # matplotlib's normal style (short, default color, unlabeled).
+        default_minor = list(ax.get_xticks(minor=True))
+        combined_minor = sorted(set(default_minor) | set(sorted_boundaries))
+        minor_labels = [
+            f"{pos:g}" if any(np.isclose(pos, b) for b in sorted_boundaries) else ""
+            for pos in combined_minor
+        ]
+        ax.set_xticks(combined_minor, labels=minor_labels, minor=True)
+        for tick, pos in zip(ax.xaxis.get_minor_ticks(), combined_minor):
+            if any(np.isclose(pos, b) for b in sorted_boundaries):
+                for line in (tick.tick1line, tick.tick2line):
+                    line.set_markersize(6)
+                    line.set_markeredgewidth(1.5)
+                    line.set_color("gray")
+                tick.label1.set_color("gray")
+                tick.label2.set_color("gray")
         for region in summarize_adev_regions(
             tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
         ):
