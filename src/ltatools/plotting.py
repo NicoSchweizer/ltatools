@@ -118,9 +118,11 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     label : str, optional
         If given, drawn as a large bold stamp across the top of the
         figure (via ``fig.suptitle``) — used to mark which measurement
-        scenario a saved figure belongs to. Rendered above and clear of
-        the panel title. Applies to the whole containing figure,
-        including one passed via `ax`. Defaults to None (no stamp).
+        scenario a saved figure belongs to. Replaces the plot's own
+        descriptive title (e.g. ``"Frequency and Power over time"`` is
+        not set) rather than stacking above it. Applies to the whole
+        containing figure, including one passed via `ax`. Defaults to
+        None (no stamp; descriptive title shown as usual).
 
     Returns
     -------
@@ -196,7 +198,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         df["time_s"], left_data, fmt, color=COLORS[quantity],
         markersize=markersize, label=axis_label(quantity, unit, delta=delta),
     )
-    ax1.set_title(title)
+    if label is None:
+        ax1.set_title(title)
     ax1.set_ylabel(axis_label(quantity, unit, delta=delta), color=COLORS[quantity])
     ax1.tick_params(axis="y", labelcolor=COLORS[quantity])
     ax1.margins(y=0.1)
@@ -251,7 +254,9 @@ def plot_adev(
     errorbars : bool, default True
         If False, `dev_err` is ignored and no error bars are drawn.
     title : str, optional
-        If given, set as the axes title.
+        If given, set as the axes title — unless `label` is also given,
+        in which case `label` takes over as the figure's suptitle and
+        `title` is not set (avoids a redundant double heading).
     save : str or pathlib.Path, optional
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
@@ -259,9 +264,10 @@ def plot_adev(
     label : str, optional
         If given, drawn as a large bold stamp across the top of the
         figure (via ``fig.suptitle``) — used to mark which measurement
-        scenario a saved figure belongs to. Rendered above and clear of
-        `title`. Applies to the whole containing figure, including one
-        passed via `ax`. Defaults to None (no stamp).
+        scenario a saved figure belongs to. Replaces `title` (see above)
+        rather than stacking above it. Applies to the whole containing
+        figure, including one passed via `ax`. Defaults to None (no
+        stamp; `title`, if given, shown as usual).
     capsize : float, default 0
         Size of the error bar end caps, in points. ``0`` draws error bars
         without caps (the default); set e.g. ``capsize=3`` to add caps.
@@ -341,7 +347,7 @@ def plot_adev(
     ax.set_xlabel(r"$\tau$ in s")
     ax.set_ylabel(adev_label(quantity, unit))
     ax.grid(True, which="both", ls="--", alpha=0.5)
-    if title is not None:
+    if title is not None and label is None:
         ax.set_title(title)
 
     if regions is not None:
@@ -501,9 +507,11 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
     label : str, optional
         If given, drawn as a large bold stamp across the top of the
         figure (via ``fig.suptitle``) — used to mark which measurement
-        scenario a saved figure belongs to. Rendered above and clear of
-        the panel title. Applies to the whole containing figure,
-        including one passed via `ax`. Defaults to None (no stamp).
+        scenario a saved figure belongs to. Replaces the plot's own
+        descriptive title (e.g. ``"Frequency Histogram"`` is not set)
+        rather than stacking above it. Applies to the whole containing
+        figure, including one passed via `ax`. Defaults to None (no
+        stamp; descriptive title shown as usual).
     **hist_kwargs
         Forwarded to ``ax.hist`` (e.g. ``density``, ``cumulative``,
         ``histtype``, ``alpha``).
@@ -538,7 +546,8 @@ def plot_histogram(df, quantity="frequency", *, unit=None, bins=50, ax=None, sav
         _, ax = plt.subplots(figsize=(8, 5))
 
     ax.hist(data, bins=bins, color=COLORS[quantity], **hist_kwargs)
-    ax.set_title(f"{quantity.capitalize()} Histogram")
+    if label is None:
+        ax.set_title(f"{quantity.capitalize()} Histogram")
     ax.set_xlabel(axis_label(quantity, unit))
     ax.set_ylabel("Count")
     ax.grid(True, which="both", ls="--", alpha=0.5)
