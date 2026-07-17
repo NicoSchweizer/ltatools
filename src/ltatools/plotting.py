@@ -21,6 +21,18 @@ from .style import COLORS, adev_label, axis_label, darken_color, finer_unit, psd
 
 _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "µW"}
 _REGION_LABEL_Y = 0.5
+_THIN_SPACE = " "
+
+
+def _format_grouped(value, decimals, group=3, sep=_THIN_SPACE):
+    """Format `value` to `decimals` fractional digits, with `sep` every
+    `group` digits after the decimal point for readability, e.g.
+    ``"268.123 456 7"``. A thin space (not a comma) avoids collision with
+    the comma-as-decimal-separator convention used in some locales.
+    """
+    integer_part, _, frac_part = f"{value:.{decimals}f}".partition(".")
+    grouped_frac = sep.join(frac_part[i : i + group] for i in range(0, len(frac_part), group))
+    return f"{integer_part}.{grouped_frac}"
 
 
 def _add_figure_label(fig, label):
@@ -100,12 +112,17 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         is subtracted in each quantity's native unit (µW / THz) before
         scaling to `power_unit`/`freq_unit`, so each axis reads small ±
         deviations around zero — useful for inspecting relative stability.
-        Each subtracted baseline is shown as a label near the top of its
-        axis (frequency top-left, power top-right), replacing
-        matplotlib's unitless scientific-notation offset with a
+        Each subtracted baseline is shown as a plain value/unit label near
+        the top of its axis (frequency top-left, power top-right),
+        replacing matplotlib's unitless scientific-notation offset with a
         physically meaningful one, and the corresponding y-axis label
-        gains a ``Δ`` prefix (e.g. ``"Δ Frequency (MHz)"``, ``"Δ Power
-        (µW)"``). The frequency baseline is always shown in THz
+        becomes a deviation label using the quantity's physics symbol
+        (e.g. ``"Frequency deviation Δν (MHz)"``, ``"Power deviation ΔP
+        (µW)"``). The frequency baseline is always shown in THz, its
+        fractional digits grouped in triples with a thin space (e.g.
+        ``"268.123 456 7 THz"``) for readability — a thin space rather
+        than a comma, since a comma there would collide with the
+        comma-as-decimal-separator convention used in some locales —
         regardless of `freq_unit`, since frequency units span many
         orders of magnitude (THz vs. kHz) and that mismatch is exactly
         the unitless-offset problem being fixed; the power baseline is
@@ -206,7 +223,7 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     ax1.set_xlabel("Time (s)")
     if delta:
         ax1.text(
-            0.0, 1.0, f"{baseline_THz:.7f} THz",
+            0.0, 1.0, f"{_format_grouped(baseline_THz, decimals=7)} THz",
             transform=ax1.transAxes, ha="left", va="bottom", color="0.2",
         )
 

@@ -64,6 +64,14 @@ _QUANTITY_NAMES = {
     "power": "Power",
 }
 
+# Symbols used alongside the quantity name in delta (deviation-from-mean)
+# labels, e.g. "Frequency deviation Δν (MHz)".
+_DELTA_SYMBOLS = {
+    "frequency": "ν",  # nu
+    "wavelength": "λ",  # lambda
+    "power": "P",
+}
+
 # Coarse -> fine, so index + 1 is always "one step finer".
 _FREQUENCY_UNIT_ORDER = ["THz", "GHz", "MHz", "kHz", "Hz"]
 _POWER_UNIT_ORDER = ["W", "mW", "µW"]
@@ -169,14 +177,16 @@ def axis_label(quantity, unit, delta=False):
     unit : str
         Unit string, e.g. ``"MHz"`` or ``"nm"``.
     delta : bool, default False
-        If True, prefix the label with ``Δ`` to denote a deviation from a
-        reference (e.g. ``"Δ Frequency (MHz)"``) rather than an absolute
-        value. Used by `plotting.plot_timeseries` with ``relative=True``.
+        If True, build a deviation-from-mean label naming the quantity
+        plus its physics symbol, e.g. ``"Frequency deviation Δν (MHz)"``
+        or ``"Power deviation ΔP (µW)"``, rather than an absolute value
+        label. Used by `plotting.plot_timeseries` with ``relative=True``.
 
     Returns
     -------
     str
-        Human-readable axis label, e.g. ``"Frequency (MHz)"``.
+        Human-readable axis label, e.g. ``"Frequency (MHz)"`` or, with
+        ``delta=True``, ``"Frequency deviation Δν (MHz)"``.
 
     Raises
     ------
@@ -189,7 +199,7 @@ def axis_label(quantity, unit, delta=False):
         )
     name = _QUANTITY_NAMES[quantity]
     if delta:
-        return f"Δ {name} ({unit})"
+        return f"{name} deviation Δ{_DELTA_SYMBOLS[quantity]} ({unit})"
     return f"{name} ({unit})"
 
 
