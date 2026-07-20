@@ -21,7 +21,7 @@ from .style import COLORS, adev_label, axis_label, darken_color, finer_unit, psd
 
 _PSD_QUANTITY_UNITS = {"frequency": "Hz", "power": "µW"}
 _REGION_LABEL_Y = 0.5
-_THIN_SPACE = " "
+_THIN_SPACE = "'"
 
 
 def _group_digits(digits, group, sep, from_left):
@@ -43,8 +43,8 @@ def _group_digits(digits, group, sep, from_left):
 def _format_grouped_str(text, group=3, sep=_THIN_SPACE):
     """Group the digits of an already-formatted fixed-point number string
     in triples with `sep` on both sides of the decimal point, e.g.
-    ``"268.123 456 7"`` (grouped fraction) or ``"55 992.39"`` (grouped
-    integer part). A thin space (not a comma) avoids collision with the
+    ``"268.123'456'7"`` (grouped fraction) or ``"55'992.39"`` (grouped
+    integer part). An apostrophe (not a comma) avoids collision with the
     comma-as-decimal-separator convention used in some locales.
 
     Left unchanged if `text` is in scientific notation (contains ``e``);
@@ -152,8 +152,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         becomes a deviation label using the quantity's physics symbol
         (e.g. ``"Frequency deviation Δν (MHz)"``, ``"Power deviation ΔP
         (µW)"``). The frequency baseline is always shown in THz, its
-        fractional digits grouped in triples with a thin space (e.g.
-        ``"268.123 456 7 THz"``) for readability — a thin space rather
+        fractional digits grouped in triples with an apostrophe (e.g.
+        ``"268.123'456'7 THz"``) for readability — an apostrophe rather
         than a comma, since a comma there would collide with the
         comma-as-decimal-separator convention used in some locales —
         regardless of `freq_unit`, since frequency units span many
@@ -357,8 +357,8 @@ def plot_adev(
         The annotated value/error are shown in a unit one step finer than
         `unit` (see `style.finer_unit`), e.g. in kHz when ``unit="MHz"`` —
         the axis itself stays in `unit`. Both numbers are formatted with
-        their digits grouped in triples by a thin space on either side of
-        the decimal point (e.g. ``"55 992.39"``), matching the baseline
+        their digits grouped in triples by an apostrophe on either side of
+        the decimal point (e.g. ``"55'992.39"``), matching the baseline
         formatting used by `plot_timeseries` with ``relative=True``.
 
         Each region boundary τ is additionally drawn as a labeled minor
@@ -442,6 +442,13 @@ def plot_adev(
         ax.set_xlim(xlim)
         for tick, pos in zip(ax.xaxis.get_minor_ticks(), combined_minor):
             if any(np.isclose(pos, b) for b in sorted_boundaries):
+                # Label pad is measured from the axis spine regardless of tick
+                # length, so the taller boundary tick (markersize 6 vs. the
+                # default minor size of 2) would otherwise draw past where the
+                # label sits — push the label out to clear it. set_pad resets
+                # the tick lines' markersize/width back to the tick defaults, so
+                # bump the pad *before* styling the lines, not after.
+                tick.set_pad(tick.get_pad() + 5)
                 for line in (tick.tick1line, tick.tick2line):
                     line.set_markersize(6)
                     line.set_markeredgewidth(1.5)
@@ -604,8 +611,8 @@ def plot_histogram(
         baseline is always shown in THz regardless of `unit`, for the
         same huge-offset reason as in `plot_timeseries`; power and
         wavelength baselines are shown in `unit` itself. Either way the
-        baseline's digits are grouped in triples with a thin space (e.g.
-        ``"268.123 456 7 THz"``), matching `plot_timeseries`. Defaults
+        baseline's digits are grouped in triples with an apostrophe (e.g.
+        ``"268.123'456'7 THz"``), matching `plot_timeseries`. Defaults
         to False, leaving existing behavior unchanged. When left False
         for ``quantity="frequency"``, matplotlib's own scientific-notation
         offset annotation (which it adds automatically for the huge,
