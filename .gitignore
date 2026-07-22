@@ -7,4 +7,4 @@ __pycache__/
 # kept locally for development, not published in the public repo
 /legacy/
 /tests/
-/PLAN.md
+/plan/
