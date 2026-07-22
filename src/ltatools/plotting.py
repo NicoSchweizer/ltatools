@@ -68,6 +68,29 @@ def _format_grouped(value, decimals, group=3, sep=_THIN_SPACE):
     return _format_grouped_str(f"{value:.{decimals}f}", group=group, sep=sep)
 
 
+def _region_error_annotation(region, region_unit, decimals=2):
+    """Build the error line of a region annotation.
+
+    Returns ``"±e {unit}"`` for the legacy/symmetric case (no CI bounds, or
+    near-symmetric half-widths), or ``"+hi / -lo {unit}"`` when the Greenhall
+    half-widths ``error_hi``/``error_lo`` are present and differ by more than
+    ~5 %. Falls back to the legacy ``error`` key when no CI half-widths exist.
+    ``decimals`` is kept at 2 (the rounding rework is deferred).
+    """
+    elo = region.get("error_lo")
+    ehi = region.get("error_hi")
+    if elo is not None and ehi is not None and np.isfinite(elo) and np.isfinite(ehi):
+        larger = max(elo, ehi)
+        smaller = min(elo, ehi)
+        if larger > 0 and (larger - smaller) / larger > 0.05:
+            return (
+                f"+{_format_grouped(ehi, decimals=decimals)} / "
+                f"-{_format_grouped(elo, decimals=decimals)} {region_unit}"
+            )
+        return f"±{_format_grouped(larger, decimals=decimals)} {region_unit}"
+    return f"±{_format_grouped(region['error'], decimals=decimals)} {region_unit}"
+
+
 def _add_figure_label(fig, label):
     """Stamp a large scenario label across the top of ``fig`` as a suptitle.
 
@@ -76,12 +99,14 @@ def _add_figure_label(fig, label):
     noticeably larger/heavier than the 14pt axes titles (``axes.titlesize``
     in ``style.py``) so it reads as a stamp, not another title. matplotlib
     reserves no suptitle space by default on either kind of figure this
-    module creates, so headroom is reserved explicitly: plain
-    ``plt.subplots`` figures (the single-panel functions) via
-    ``fig.subplots_adjust``; ``constrained_layout=True`` figures (the two
-    multi-panel functions) via their layout engine's ``rect``, since
-    calling ``subplots_adjust`` directly on a figure with a layout engine
-    is ignored. Either way this keeps the stamp clear of each panel's own
+    module creates, so headroom is reserved explicitly: figures with a
+    ``constrained_layout=True`` engine (every figure a plotting function
+    creates for itself — both the single-panel functions and the two
+    multi-panel functions — get one) via the engine's ``rect``; a plain
+    engine-less figure (only possible when the caller passed in their own
+    `ax`/figure) via ``fig.subplots_adjust``, since calling
+    ``subplots_adjust`` directly on a figure with a layout engine is
+    ignored. Either way this keeps the stamp clear of each panel's own
     title and of the in-axes ``relative=True`` baseline text (drawn at
     axes-fraction y=1.0).
     """
@@ -110,7 +135,7 @@ def _quantity_scaler(quantity):
     raise ValueError(f"Unknown quantity {quantity!r}; expected one of {sorted(COLORS)}")
 
 
-def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="µW", markersize=4, save=None, relative=False, label=None):
+def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", power_unit="a.u.", markersize=4, save=None, relative=False, label=None, figsize=None, show_power=True, print_mean=False, print_power_mean=None, tick_direction=None):
     """Dual-axis time-series plot: frequency or wavelength (left) and power (right).
 
     Parameters
@@ -124,13 +149,21 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     ax : matplotlib.axes.Axes, optional
         Axes to draw the left series into. If omitted, a new figure is
         created. The right (power) axis is always created via ``twinx``.
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches, used only when a new
+        figure is created (i.e. when `ax` is None). Ignored if `ax` is
+        given. If omitted, the function's default size is used.
     lines : bool, default False
         If True, connect data points with lines (marker ``'x-'``).
     freq_unit : str, default "THz"
         Target unit for the left axis when ``kind="freq"``; see
         `scale_frequency`. Ignored when ``kind="wl"``.
-    power_unit : str, default "µW"
-        Target unit for the right (power) axis; see `scale_power`.
+    power_unit : str, default "a.u."
+        Target unit for the right (power) axis; see `scale_power`. The
+        wavemeter's power reading has no absolute calibration, hence the
+        "arbitrary units" default; pass e.g. ``"µW"``/``"mW"``/``"W"`` for
+        the old physically-scaled behavior (same underlying numbers,
+        `scale_power`'s factor for `"a.u."` is 1.0 like `"µW"`).
     markersize : float, default 4
         Marker size for both series.
     save : str or pathlib.Path, optional
@@ -149,9 +182,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         the top of its axis (frequency top-left, power top-right),
         replacing matplotlib's unitless scientific-notation offset with a
         physically meaningful one, and the corresponding y-axis label
-        becomes a deviation label using the quantity's physics symbol
-        (e.g. ``"Frequency deviation Δν (MHz)"``, ``"Power deviation ΔP
-        (µW)"``). The frequency baseline is always shown in THz, its
+        becomes a deviation label using just the quantity's physics symbol
+        (e.g. ``"Δν (MHz)"``, ``"ΔP (µW)"``). The frequency baseline is always shown in THz, its
         fractional digits grouped in triples with an apostrophe (e.g.
         ``"268.123'456'7 THz"``) for readability — an apostrophe rather
         than a comma, since a comma there would collide with the
@@ -174,11 +206,30 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         not set) rather than stacking above it. Applies to the whole
         containing figure, including one passed via `ax`. Defaults to
         None (no stamp; descriptive title shown as usual).
+    show_power : bool, default True
+        If False, the power axis/curve is omitted entirely: no twin
+        axis is created, no power line is drawn, and the legend has no
+        power entry (in `relative` mode, the power baseline label is
+        also omitted). `ax_right` is then `None` in the return value.
+    print_mean : bool, default False
+        If True, print the mean of the left-axis quantity (frequency in
+        THz, or wavelength in nm) to stdout.
+    print_power_mean : bool, optional
+        If True, print the mean power (in `power_unit`) to stdout. If
+        omitted (default), follows `print_mean` — set explicitly to
+        decouple the two, e.g. `print_mean=True, print_power_mean=False`
+        prints only the frequency/wavelength mean. Independent of
+        `show_power` — the mean is computed from the data regardless of
+        whether the power curve is drawn.
+    tick_direction : {"in", "out", "inout"}, optional
+        Override the x-axis tick direction for this plot. If omitted,
+        falls back to the global default (``style.TICK_DIRECTION``).
 
     Returns
     -------
     ax_left, ax_right : matplotlib.axes.Axes
-        The frequency/wavelength axis and the power axis.
+        The frequency/wavelength axis and the power axis. `ax_right` is
+        `None` when `show_power` is False.
 
     Raises
     ------
@@ -189,45 +240,49 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     --------
     >>> df = load_lta_file("scan.lta")
     >>> plot_timeseries(df, kind="freq", freq_unit="MHz", save="timeseries")
-    (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (µW)'>)
+    (<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: ylabel='Power (a.u.)'>)
     >>> plot_timeseries(df, kind="freq", freq_unit="kHz", relative=True)  # relative stability
+    >>> plot_timeseries(df, kind="freq", show_power=False)  # frequency only, no power axis
+    >>> plot_timeseries(df, kind="freq", print_mean=True, print_power_mean=False)  # print frequency mean only
     """
     fmt = "x-" if lines else "x"
 
     if ax is None:
-        _, ax1 = plt.subplots(figsize=(12, 5))
+        _, ax1 = plt.subplots(figsize=figsize if figsize is not None else (12, 5), constrained_layout=True)
     else:
         ax1 = ax
-    ax2 = ax1.twinx()
+    ax2 = ax1.twinx() if show_power else None
 
     ax1.set_zorder(2)
-    ax2.set_zorder(1)
     ax1.patch.set_visible(False)
 
-    if relative:
-        # subtract the mean in native uW *before* scaling (mirrors the frequency
-        # baseline below), but — unlike frequency, which is always shown in the
-        # fixed native THz — display the baseline in `power_unit` itself: power
-        # units don't span the many orders of magnitude frequency units do, so
-        # there's no huge-offset problem to fix, and matching the axis unit
-        # keeps the baseline label directly comparable to the plotted values.
-        baseline_uW = float(df["power_uW"].mean())
-        power_scaled = scale_power(df["power_uW"] - baseline_uW, power_unit)
-    else:
-        power_scaled = scale_power(df["power_uW"], power_unit)
-    ax2.plot(
-        df["time_s"], power_scaled, fmt, color=COLORS["power"],
-        markersize=markersize, label=axis_label("power", power_unit, delta=relative),
-    )
-    ax2.set_ylabel(axis_label("power", power_unit, delta=relative), color=COLORS["power"])
-    ax2.tick_params(axis="y", labelcolor=COLORS["power"])
-    ax2.margins(y=0.1)
-    if relative:
-        baseline_power_display = float(scale_power(baseline_uW, power_unit))
-        ax2.text(
-            1.0, 1.0, f"{_format_grouped_str(f'{baseline_power_display:.6g}')} {power_unit}",
-            transform=ax2.transAxes, ha="right", va="bottom", color="0.2",
+    if show_power:
+        ax2.set_zorder(1)
+
+        if relative:
+            # subtract the mean in native uW *before* scaling (mirrors the frequency
+            # baseline below), but — unlike frequency, which is always shown in the
+            # fixed native THz — display the baseline in `power_unit` itself: power
+            # units don't span the many orders of magnitude frequency units do, so
+            # there's no huge-offset problem to fix, and matching the axis unit
+            # keeps the baseline label directly comparable to the plotted values.
+            baseline_uW = float(df["power_uW"].mean())
+            power_scaled = scale_power(df["power_uW"] - baseline_uW, power_unit)
+        else:
+            power_scaled = scale_power(df["power_uW"], power_unit)
+        ax2.plot(
+            df["time_s"], power_scaled, fmt, color=COLORS["power"],
+            markersize=markersize, label=axis_label("power", power_unit, delta=relative),
         )
+        ax2.set_ylabel(axis_label("power", power_unit, delta=relative), color=COLORS["power"])
+        ax2.tick_params(axis="y", labelcolor=COLORS["power"])
+        ax2.margins(y=0.1)
+        if relative:
+            baseline_power_display = float(scale_power(baseline_uW, power_unit))
+            ax2.text(
+                1.0, 1.0, f"{_format_grouped_str(f'{baseline_power_display:.6g}')} {power_unit}",
+                transform=ax2.transAxes, ha="right", va="bottom", color="0.2",
+            )
 
     if kind == "wl":
         quantity, unit, title = "wavelength", "nm", "Wavelength and Power over time"
@@ -255,6 +310,8 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
     ax1.tick_params(axis="y", labelcolor=COLORS[quantity])
     ax1.margins(y=0.1)
     ax1.set_xlabel("Time (s)")
+    if tick_direction is not None:
+        ax1.tick_params(axis="x", direction=tick_direction)
     if delta:
         ax1.text(
             0.0, 1.0, f"{_format_grouped(baseline_THz, decimals=7)} THz",
@@ -262,8 +319,11 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         )
 
     lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines2 + lines1, labels2 + labels1, loc="best")
+    if show_power:
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines2 + lines1, labels2 + labels1, loc="best")
+    else:
+        ax1.legend(lines1, labels1, loc="best")
 
     ax1.grid(True, which="both", ls="--", alpha=0.5)
 
@@ -275,13 +335,28 @@ def plot_timeseries(df, kind="freq", ax=None, lines=False, freq_unit="THz", powe
         save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=300)
 
+    print_power_mean = print_mean if print_power_mean is None else print_power_mean
+    if print_mean or print_power_mean:
+        summary_lines = ["Timeseries mean values:"]
+        if print_mean:
+            if kind == "wl":
+                mean_wl = df["wavelength_nm"].mean()
+                summary_lines.append(f"  Wavelength: {_format_grouped_str(f'{mean_wl:.6g}')} nm")
+            else:
+                mean_freq_THz = df["frequency_THz"].mean()
+                summary_lines.append(f"  Frequency: {_format_grouped(mean_freq_THz, decimals=7)} THz")
+        if print_power_mean:
+            mean_power = float(scale_power(df["power_uW"].mean(), power_unit))
+            summary_lines.append(f"  Power: {_format_grouped_str(f'{mean_power:.6g}')} {power_unit}")
+        print("\n".join(summary_lines))
+
     return ax1, ax2
 
 
 def plot_adev(
-    tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None,
+    tau, dev, dev_err=None, *, unit="MHz", quantity="frequency", ax=None, figsize=None,
     errorbars=True, title=None, save=None, label=None, capsize=0, errorbar_color=None,
-    regions=None, region_agg="mean",
+    regions=None, region_agg="mean", ci_bounds=None, print_regions=False, tick_direction=None,
 ):
     """Log-log Allan deviation plot with error bars.
 
@@ -294,7 +369,7 @@ def plot_adev(
         was given (THz for frequency, uW for power, nm for wavelength).
     dev_err : array_like, optional
         Error of `dev` (e.g. from ``compute_oadev``'s `dev_err` return
-        value). Required if `regions` is given.
+        value). Required if `regions` or `print_regions` is given.
     unit : str, default "MHz"
         Target unit for `dev`/`dev_err`; see
         `scale_frequency`/`scale_power`.
@@ -302,8 +377,22 @@ def plot_adev(
         Physical quantity `dev` represents. Determines color and scaling.
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches, used only when a new
+        figure is created (i.e. when `ax` is None). Ignored if `ax` is
+        given. If omitted, the function's default size is used.
     errorbars : bool, default True
-        If False, `dev_err` is ignored and no error bars are drawn.
+        If False, `dev_err`/`ci_bounds` are ignored and no error bars are drawn.
+    ci_bounds : tuple of array_like, optional
+        ``(ci_lo, ci_hi)`` absolute deviation bounds (same native unit as `dev`,
+        e.g. from ``compute_oadev(..., ci=...)``). When given (and
+        ``errorbars=True``) the error bars become asymmetric Greenhall
+        intervals instead of the symmetric `dev_err` bars; skipped points (NaN
+        bounds) draw no bar. When `regions`/`print_regions` is also given, the
+        bounds are forwarded (scaled) to ``summarize_adev_regions`` and the
+        region annotation shows the correlated Greenhall error (``+a / -b`` when
+        asymmetric). Either `dev_err` or `ci_bounds` satisfies the
+        `regions`/`print_regions` requirement.
     title : str, optional
         If given, set as the axes title — unless `label` is also given,
         in which case `label` takes over as the figure's suptitle and
@@ -369,8 +458,24 @@ def plot_adev(
         unlabeled log-scale minor ticks (the 2-9 sub-ticks per decade),
         which remain in their normal short, unlabeled style.
     region_agg : {"mean", "median"}, default "mean"
-        Aggregation statistic used within each region when `regions` is
-        given. Ignored otherwise.
+        Aggregation statistic used within each region when `regions` or
+        `print_regions` is given. Ignored otherwise.
+    print_regions : bool, default False
+        If True, print the τ-region summary (boundaries — the "region
+        setpoints" — plus each region's aggregated value, propagated
+        error, and point count) to stdout via
+        `analysis.summarize_adev_regions`. Independent of `regions`: if
+        `regions` is not given, boundaries fall back to
+        `analysis.DEFAULT_ADEV_REGION_BOUNDARIES`, so the numbers can be
+        printed without also drawing the on-plot annotation. Values are
+        shown in the same finer unit as the on-plot annotation (see
+        `regions` above). Requires `dev_err`.
+    tick_direction : {"in", "out", "inout"}, optional
+        Override the x-axis major-tick direction for this plot. If
+        omitted, falls back to the global default
+        (``style.TICK_DIRECTION``). Applies only to the major (decade)
+        ticks — the minor sub-ticks and the labeled region-boundary
+        ticks (see `regions` above) are unaffected.
 
     Returns
     -------
@@ -380,39 +485,88 @@ def plot_adev(
     --------
     >>> tau, dev, dev_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"])
     >>> plot_adev(tau, dev, dev_err, unit="MHz", save="adev_freq")
-    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
+    <Axes: xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (MHz)'>
     >>> plot_adev(tau, dev, dev_err, unit="MHz", capsize=3)  # with end caps
-    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
+    <Axes: xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (MHz)'>
     >>> plot_adev(tau, dev, dev_err, unit="MHz", regions=True)  # short/mid/long-term summary
-    <Axes: xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>
+    <Axes: xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (MHz)'>
+    >>> plot_adev(tau, dev, dev_err, unit="MHz", print_regions=True)  # prints summary, no annotation drawn
+    <Axes: xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (MHz)'>
     """
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 5))
+        _, ax = plt.subplots(figsize=figsize if figsize is not None else (8, 5), constrained_layout=True)
 
     scale = _quantity_scaler(quantity)
     dev_scaled = scale(dev, unit)
 
-    yerr = scale(dev_err, unit) if (errorbars and dev_err is not None) else None
+    if errorbars and ci_bounds is not None:
+        lo_s = scale(np.asarray(ci_bounds[0], dtype=float), unit)
+        hi_s = scale(np.asarray(ci_bounds[1], dtype=float), unit)
+        yerr = np.vstack([
+            np.clip(dev_scaled - lo_s, 0, None),
+            np.clip(hi_s - dev_scaled, 0, None),
+        ])
+        yerr = np.nan_to_num(yerr, nan=0.0)  # skipped points draw no bar
+    elif errorbars and dev_err is not None:
+        yerr = scale(dev_err, unit)
+    else:
+        yerr = None
     color = COLORS[quantity]
     ecolor = errorbar_color if errorbar_color is not None else darken_color(color)
 
     ax.errorbar(tau, dev_scaled, yerr=yerr, fmt="x", color=color, ecolor=ecolor, capsize=capsize)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel(r"$\tau$ in s")
+    ax.set_xlabel(r"$\tau$ (s)")
     ax.set_ylabel(adev_label(quantity, unit))
     ax.grid(True, which="both", ls="--", alpha=0.5)
+    if tick_direction is not None:
+        ax.tick_params(axis="x", direction=tick_direction)
     if title is not None and label is None:
         ax.set_title(title)
 
-    if regions is not None:
-        if dev_err is None:
-            raise ValueError("regions requires dev_err for error propagation")
-        boundaries = DEFAULT_ADEV_REGION_BOUNDARIES if regions is True else regions
+    want_draw = regions is not None
+    if want_draw or print_regions:
+        if dev_err is None and ci_bounds is None:
+            raise ValueError("regions/print_regions require dev_err or ci_bounds for error propagation")
+        boundaries = DEFAULT_ADEV_REGION_BOUNDARIES if (regions is None or regions is True) else regions
         region_unit = finer_unit(unit, quantity)
         dev_region_scaled = scale(dev, region_unit)
-        dev_err_region_scaled = scale(dev_err, region_unit)
+        dev_err_region_scaled = scale(dev_err, region_unit) if dev_err is not None else None
+        # Pitfall 4: scale the absolute bounds with the same call, then let
+        # summarize_adev_regions derive the half-widths (in that order).
+        ci_bounds_region = None
+        if ci_bounds is not None:
+            ci_bounds_region = (
+                scale(np.asarray(ci_bounds[0], dtype=float), region_unit),
+                scale(np.asarray(ci_bounds[1], dtype=float), region_unit),
+            )
         tau_arr = np.asarray(tau)
+        region_summary = summarize_adev_regions(
+            tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries,
+            agg=region_agg, ci_bounds=ci_bounds_region,
+        )
+
+    if print_regions:
+        print(f"{quantity.capitalize()} Allan deviation τ-region summary (agg={region_agg}):")
+        for region in region_summary:
+            hi = "∞" if not np.isfinite(region["tau_max"]) else f"{region['tau_max']:g}"
+            if "n_ci" in region:
+                print(
+                    f"  τ ∈ [{region['tau_min']:g}, {hi}) s: "
+                    f"{_format_grouped(region['value'], decimals=2)} {region_unit} "
+                    f"{_region_error_annotation(region, region_unit)} "
+                    f"(n={region['n']}, n_ci={region['n_ci']})"
+                )
+            else:
+                print(
+                    f"  τ ∈ [{region['tau_min']:g}, {hi}) s: "
+                    f"{_format_grouped(region['value'], decimals=2)} {region_unit} "
+                    f"± {_format_grouped(region['error'], decimals=2)} {region_unit} "
+                    f"(n={region['n']})"
+                )
+
+    if want_draw:
         sorted_boundaries = sorted(boundaries)
         for boundary in sorted_boundaries:
             ax.axvline(boundary, color="gray", linestyle="--", linewidth=1.5)
@@ -440,24 +594,37 @@ def plot_adev(
         # autoscaled range) — restore the original x-range so the plot doesn't
         # zoom out to show mostly-empty decades.
         ax.set_xlim(xlim)
+        # The extra label padding below only buys clearance when the boundary
+        # tick mark draws *outward* from the spine, into the region where the
+        # label sits; pointing inward, it never reaches the label. Read the
+        # direction now in effect on the x-axis — either the `tick_direction`
+        # override applied above or, failing that, whatever a caller-supplied
+        # `ax` was explicitly preset to. get_tick_params only reports a
+        # direction if tick_params(direction=...) was actually called on this
+        # axis; when direction instead comes from the rcParam (the common case
+        # — no per-call override, just style.py's global default) the key is
+        # simply absent, so fall back to the rcParam actually in effect.
+        # "inout" still reaches outward by the full tick length, so it keeps
+        # the same clearance as "out".
+        tick_dir = ax.xaxis.get_tick_params(which="major").get("direction") or plt.rcParams["xtick.direction"]
+        boundary_pad = 0 if tick_dir == "in" else 5
         for tick, pos in zip(ax.xaxis.get_minor_ticks(), combined_minor):
             if any(np.isclose(pos, b) for b in sorted_boundaries):
                 # Label pad is measured from the axis spine regardless of tick
                 # length, so the taller boundary tick (markersize 6 vs. the
-                # default minor size of 2) would otherwise draw past where the
-                # label sits — push the label out to clear it. set_pad resets
+                # default minor size of 2) would, when pointing outward, draw
+                # past where the label sits — push the label out to clear it
+                # (boundary_pad above; 0 when ticks point inward). set_pad resets
                 # the tick lines' markersize/width back to the tick defaults, so
                 # bump the pad *before* styling the lines, not after.
-                tick.set_pad(tick.get_pad() + 5)
+                tick.set_pad(tick.get_pad() + boundary_pad)
                 for line in (tick.tick1line, tick.tick2line):
                     line.set_markersize(6)
                     line.set_markeredgewidth(1.5)
                     line.set_color("gray")
                 tick.label1.set_color("gray")
                 tick.label2.set_color("gray")
-        for region in summarize_adev_regions(
-            tau_arr, dev_region_scaled, dev_err_region_scaled, boundaries=boundaries, agg=region_agg
-        ):
+        for region in region_summary:
             mask = (tau_arr >= region["tau_min"]) & (tau_arr < region["tau_max"])
             left = region["tau_min"] if region["tau_min"] > 0 else float(np.min(tau_arr[mask]))
             right = region["tau_max"] if np.isfinite(region["tau_max"]) else float(np.max(tau_arr[mask]))
@@ -465,7 +632,7 @@ def plot_adev(
             tau_center = float(np.sqrt(left * right))
             region_label = ax.annotate(
                 f"{_format_grouped(region['value'], decimals=2)} {region_unit}\n"
-                f"±{_format_grouped(region['error'], decimals=2)} {region_unit}",
+                f"{_region_error_annotation(region, region_unit)}",
                 xy=(tau_center, _REGION_LABEL_Y), xycoords=("data", "axes fraction"),
                 ha="center", va="center",
             )
@@ -482,7 +649,7 @@ def plot_adev(
     return ax
 
 
-def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None, save=None, label=None):
+def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=None, figsize=None, save=None, label=None, tick_direction=None):
     """Log-log power (or amplitude) spectral density plot with a confidence band.
 
     Parameters
@@ -503,6 +670,10 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
         amplitude spectral density).
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches, used only when a new
+        figure is created (i.e. when `ax` is None). Ignored if `ax` is
+        given. If omitted, the function's default size is used.
     save : str or pathlib.Path, optional
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
@@ -513,6 +684,9 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
         scenario a saved figure belongs to. Applies to the whole
         containing figure, including one passed via `ax`. Defaults to
         None (no stamp).
+    tick_direction : {"in", "out", "inout"}, optional
+        Override the x-axis tick direction for this plot. If omitted,
+        falls back to the global default (``style.TICK_DIRECTION``).
 
     Returns
     -------
@@ -526,7 +700,7 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
         raise ValueError(f"Unknown scaling {scaling!r}; expected 'psd' or 'asd'")
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 5))
+        _, ax = plt.subplots(figsize=figsize if figsize is not None else (8, 5), constrained_layout=True)
 
     f = np.asarray(f)
     Pxx = np.asarray(Pxx)
@@ -550,6 +724,8 @@ def plot_psd(f, Pxx, *, ci_bounds=None, quantity="frequency", scaling="psd", ax=
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel(psd_label(quantity, _PSD_QUANTITY_UNITS[quantity], scaling=scaling))
     ax.grid(True, which="both", ls="--", alpha=0.5)
+    if tick_direction is not None:
+        ax.tick_params(axis="x", direction=tick_direction)
 
     _add_figure_label(ax.get_figure(), label)
 
@@ -570,7 +746,8 @@ _HIST_QUANTITY_DEFAULTS = {
 
 
 def plot_histogram(
-    df, quantity="frequency", *, unit=None, bins=50, ax=None, save=None, relative=False, label=None, **hist_kwargs
+    df, quantity="frequency", *, unit=None, bins=50, ax=None, figsize=None, save=None, relative=False, label=None,
+    tick_direction=None, **hist_kwargs
 ):
     """Histogram of a single quantity's distribution.
 
@@ -591,6 +768,10 @@ def plot_histogram(
         Passed to ``ax.hist``.
     ax : matplotlib.axes.Axes, optional
         Axes to draw into. If omitted, a new figure is created.
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches, used only when a new
+        figure is created (i.e. when `ax` is None). Ignored if `ax` is
+        given. If omitted, the function's default size is used.
     save : str or pathlib.Path, optional
         If given, the figure containing `ax` is saved as a 300 dpi PNG; the
         parent directory is created if it does not exist. When an existing
@@ -606,8 +787,8 @@ def plot_histogram(
         absolute optical frequency are all huge, nearly-identical
         numbers). The subtracted baseline is shown as a plain value/unit
         label near the top-left of the axes, and the x-axis label
-        becomes a deviation label using the quantity's physics symbol
-        (e.g. ``"Frequency deviation Δν (MHz)"``). The frequency
+        becomes a deviation label using just the quantity's physics symbol
+        (e.g. ``"Δν (MHz)"``). The frequency
         baseline is always shown in THz regardless of `unit`, for the
         same huge-offset reason as in `plot_timeseries`; power and
         wavelength baselines are shown in `unit` itself. Either way the
@@ -626,6 +807,9 @@ def plot_histogram(
         rather than stacking above it. Applies to the whole containing
         figure, including one passed via `ax`. Defaults to None (no
         stamp; descriptive title shown as usual).
+    tick_direction : {"in", "out", "inout"}, optional
+        Override the x-axis tick direction for this plot. If omitted,
+        falls back to the global default (``style.TICK_DIRECTION``).
     **hist_kwargs
         Forwarded to ``ax.hist`` (e.g. ``density``, ``cumulative``,
         ``histtype``, ``alpha``).
@@ -663,7 +847,7 @@ def plot_histogram(
         data = scale(raw, unit)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 5))
+        _, ax = plt.subplots(figsize=figsize if figsize is not None else (8, 5), constrained_layout=True)
 
     ax.hist(data, bins=bins, color=COLORS[quantity], **hist_kwargs)
     if label is None:
@@ -671,6 +855,8 @@ def plot_histogram(
     ax.set_xlabel(axis_label(quantity, unit, delta=relative))
     ax.set_ylabel("Frequency (n)")
     ax.grid(True, which="both", ls="--", alpha=0.5)
+    if tick_direction is not None:
+        ax.tick_params(axis="x", direction=tick_direction)
 
     if relative:
         if quantity == "frequency":
@@ -727,7 +913,7 @@ def overview_figure(
     *,
     kind="freq",
     freq_unit="MHz",
-    power_unit="µW",
+    power_unit="a.u.",
     taus="octave",
     lines=False,
     errorbars=True,
@@ -738,6 +924,13 @@ def overview_figure(
     errorbar_color=None,
     regions=None,
     region_agg="mean",
+    ci=None,
+    print_regions=False,
+    show_power=True,
+    print_mean=False,
+    print_power_mean=None,
+    figsize=None,
+    tick_direction=None,
 ):
     """Combined overview figure: timeseries on top, frequency and power ADEV below.
 
@@ -750,8 +943,9 @@ def overview_figure(
     freq_unit : str, default "MHz"
         Unit for the timeseries frequency axis (when ``kind="freq"``) and
         the frequency ADEV panel.
-    power_unit : str, default "µW"
-        Unit for the timeseries power axis and the power ADEV panel.
+    power_unit : str, default "a.u."
+        Unit for the timeseries power axis and the power ADEV panel; see
+        `plot_timeseries`.
     taus : str or numpy.ndarray, default "octave"
         Averaging times passed to ``compute_oadev``. ``"octave"`` (powers of
         two) is dramatically faster than ``"all"`` on large files — e.g.
@@ -786,7 +980,33 @@ def overview_figure(
         works regardless of the `errorbars` display toggle above).
     region_agg : {"mean", "median"}, default "mean"
         Passed to ``plot_adev`` for both ADEV panels. Ignored unless
-        `regions` is given.
+        `regions` or `print_regions` is given.
+    ci : float, optional
+        If given (e.g. ``0.6826894921370859`` for 1 sigma), both ADEV panels get
+        Greenhall confidence intervals: ``compute_oadev(..., ci=ci)`` is used and
+        the resulting bounds drive the error bars (and, with `regions`, the
+        correlated region error). ``None`` (default) leaves the code path
+        identical to today's.
+    print_regions : bool, default False
+        Passed to ``plot_adev`` for both ADEV panels — prints each
+        panel's τ-region summary to stdout; see `plot_adev`.
+    show_power : bool, default True
+        Passed to ``plot_timeseries``. If False, the timeseries panel's
+        power axis/curve is omitted (the power ADEV panel is unaffected
+        — it is computed independently from `df["power_uW"]`).
+    print_mean : bool, default False
+        Passed to ``plot_timeseries`` — prints the timeseries panel's
+        left-axis (frequency/wavelength) mean to stdout.
+    print_power_mean : bool, optional
+        Passed to ``plot_timeseries`` — prints the timeseries panel's
+        power mean to stdout; follows `print_mean` if omitted.
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches. If omitted, the
+        function's default size is used.
+    tick_direction : {"in", "out", "inout"}, optional
+        Passed to ``plot_timeseries`` and ``plot_adev`` for all three
+        panels. If omitted, falls back to the global default
+        (``style.TICK_DIRECTION``).
 
     Returns
     -------
@@ -799,35 +1019,51 @@ def overview_figure(
     >>> df = load_lta_file("scan.lta")
     >>> fig, axes = overview_figure(df, freq_unit="kHz", errorbars=False, save="overview")
     >>> axes
-    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in kHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in µW'>]
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (kHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (kHz)'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (a.u.)'>]
     >>> fig, axes = overview_figure(df, capsize=3)  # with end caps
     >>> fig, axes = overview_figure(df, regions=True)  # short/mid/long-term summary
     """
-    fig = plt.figure(figsize=(12, 8), constrained_layout=True)
+    fig = plt.figure(figsize=figsize if figsize is not None else (12, 8), constrained_layout=True)
     gs = fig.add_gridspec(2, 2)
 
     ax_ts = fig.add_subplot(gs[0, :])
     plot_timeseries(
         df, kind=kind, ax=ax_ts, lines=lines,
         freq_unit=freq_unit, power_unit=power_unit, markersize=markersize,
+        show_power=show_power, print_mean=print_mean, print_power_mean=print_power_mean,
+        tick_direction=tick_direction,
     )
 
     ax_freq = fig.add_subplot(gs[1, 0])
-    tau_f, dev_f, dev_f_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"], taus=taus)
+    freq_ci_bounds = None
+    if ci is not None:
+        tau_f, dev_f, dev_f_err, _n_f, freq_ci_bounds = compute_oadev(
+            df["frequency_THz"], time_s=df["time_s"], taus=taus, ci=ci
+        )
+    else:
+        tau_f, dev_f, dev_f_err, _ = compute_oadev(df["frequency_THz"], time_s=df["time_s"], taus=taus)
     plot_adev(
         tau_f, dev_f, dev_f_err, unit=freq_unit, quantity="frequency", ax=ax_freq,
         errorbars=errorbars, title="Frequency Allan Deviation",
         capsize=capsize, errorbar_color=errorbar_color,
-        regions=regions, region_agg=region_agg,
+        regions=regions, region_agg=region_agg, ci_bounds=freq_ci_bounds, print_regions=print_regions,
+        tick_direction=tick_direction,
     )
 
     ax_power = fig.add_subplot(gs[1, 1])
-    tau_p, dev_p, dev_p_err, _ = compute_oadev(df["power_uW"], time_s=df["time_s"], taus=taus)
+    power_ci_bounds = None
+    if ci is not None:
+        tau_p, dev_p, dev_p_err, _n_p, power_ci_bounds = compute_oadev(
+            df["power_uW"], time_s=df["time_s"], taus=taus, ci=ci
+        )
+    else:
+        tau_p, dev_p, dev_p_err, _ = compute_oadev(df["power_uW"], time_s=df["time_s"], taus=taus)
     plot_adev(
         tau_p, dev_p, dev_p_err, unit=power_unit, quantity="power", ax=ax_power,
         errorbars=errorbars, title="Power Allan Deviation",
         capsize=capsize, errorbar_color=errorbar_color,
-        regions=regions, region_agg=region_agg,
+        regions=regions, region_agg=region_agg, ci_bounds=power_ci_bounds, print_regions=print_regions,
+        tick_direction=tick_direction,
     )
 
     _add_figure_label(fig, label)
@@ -840,7 +1076,7 @@ def overview_figure(
     return fig, [ax_ts, ax_freq, ax_power]
 
 
-def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None, label=None):
+def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None, label=None, figsize=None, tick_direction=None):
     """Separate PSD/ASD overview figure: frequency panel and power panel side by side.
 
     Not part of ``overview_figure`` — call this explicitly when a spectral
@@ -865,6 +1101,12 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None, label=Non
         whole figure (via ``fig.suptitle``) — used to mark which
         measurement scenario a saved figure belongs to. Defaults to
         None (no stamp).
+    figsize : tuple of float, optional
+        Figure size ``(width, height)`` in inches. If omitted, the
+        function's default size is used.
+    tick_direction : {"in", "out", "inout"}, optional
+        Passed to ``plot_psd`` for both panels. If omitted, falls back
+        to the global default (``style.TICK_DIRECTION``).
 
     Returns
     -------
@@ -879,18 +1121,18 @@ def psd_figure(df, *, scaling="psd", ci=None, nperseg=None, save=None, label=Non
     >>> axes
     [<Axes: xlabel='Frequency (Hz)', ylabel='ASD in Hz/$\\sqrt{\\mathrm{Hz}}$'>, <Axes: xlabel='Frequency (Hz)', ylabel='ASD in µW/$\\sqrt{\\mathrm{Hz}}$'>]
     """
-    fig, (ax_freq, ax_power) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    fig, (ax_freq, ax_power) = plt.subplots(1, 2, figsize=figsize if figsize is not None else (12, 5), constrained_layout=True)
 
     freq_hz = df["frequency_THz"] * 1e12
     freq_result = compute_psd(freq_hz, time_s=df["time_s"], ci=ci, nperseg=nperseg)
     f_f, Pxx_f, *rest_f = freq_result
     bounds_f = rest_f[0] if rest_f else None
-    plot_psd(f_f, Pxx_f, ci_bounds=bounds_f, quantity="frequency", scaling=scaling, ax=ax_freq)
+    plot_psd(f_f, Pxx_f, ci_bounds=bounds_f, quantity="frequency", scaling=scaling, ax=ax_freq, tick_direction=tick_direction)
 
     power_result = compute_psd(df["power_uW"], time_s=df["time_s"], ci=ci, nperseg=nperseg)
     f_p, Pxx_p, *rest_p = power_result
     bounds_p = rest_p[0] if rest_p else None
-    plot_psd(f_p, Pxx_p, ci_bounds=bounds_p, quantity="power", scaling=scaling, ax=ax_power)
+    plot_psd(f_p, Pxx_p, ci_bounds=bounds_p, quantity="power", scaling=scaling, ax=ax_power, tick_direction=tick_direction)
 
     _add_figure_label(fig, label)
 
@@ -933,7 +1175,7 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
     --------
     >>> fig, axes = lta_overview("scan.lta")
     >>> axes
-    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in MHz'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ in s', ylabel='$\\sigma(\\tau)$ in µW'>]
+    [<Axes: title={'center': 'Frequency and Power over time'}, xlabel='Time (s)', ylabel='Frequency (MHz)'>, <Axes: title={'center': 'Frequency Allan Deviation'}, xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (MHz)'>, <Axes: title={'center': 'Power Allan Deviation'}, xlabel='$\\tau$ (s)', ylabel='$\\sigma(\\tau)$ (a.u.)'>]
     >>> results = lta_overview("scan.lta", segments=True, n_segments=2)
     >>> len(results)
     2
@@ -947,7 +1189,7 @@ def lta_overview(file_path, *, cleanup=False, segments=False, n_segments=2, **kw
 
 _ADEV_QUANTITY_DEFAULTS = {
     "frequency": {"column": "frequency_THz", "unit": "MHz", "title": "Frequency Allan Deviation"},
-    "power": {"column": "power_uW", "unit": "µW", "title": "Power Allan Deviation"},
+    "power": {"column": "power_uW", "unit": "a.u.", "title": "Power Allan Deviation"},
 }
 
 _SPECTRUM_QUANTITY_COLUMNS = {
@@ -1003,16 +1245,25 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         `data` is already a DataFrame.
     **kwargs
         Forwarded to the underlying plotting function for the chosen
-        `kind` (e.g. `freq_unit`, `errorbars`, `lines`, `scaling`, `taus`,
-        `unit`, `title`, `ax`, `capsize`, `errorbar_color`, `regions`,
-        `region_agg`, `relative`, `label`, ...). For
-        ``kind="adev"``/``kind="overview"``, `regions`/`region_agg` add a
-        short/mid/long-term (or custom) τ-region summary to the ADEV
-        panel(s) — see `plot_adev`. `relative` centers `kind="timeseries"`
-        or `kind="hist"` on their own mean instead of showing the
-        absolute value — see `plot_timeseries`/`plot_histogram`. `label`
-        stamps a large bold scenario label across the top of the figure
-        — see any of the underlying plotting functions.
+        `kind` (e.g. `freq_unit`, `power_unit`, `errorbars`, `lines`,
+        `scaling`, `taus`, `unit`, `title`, `ax`, `figsize`, `capsize`,
+        `errorbar_color`, `regions`, `region_agg`, `print_regions`,
+        `show_power`, `print_mean`, `print_power_mean`, `relative`,
+        `label`, ...). For ``kind="adev"``/``kind="overview"``,
+        `regions`/`region_agg` add a short/mid/long-term (or custom)
+        τ-region summary to the ADEV panel(s), and `print_regions` prints
+        that same summary to stdout independently of `regions` — see
+        `plot_adev`. For ``kind="timeseries"``/``kind="overview"``,
+        `show_power` hides the power axis/curve, and `print_mean`/
+        `print_power_mean` print the plotted mean(s) to stdout — see
+        `plot_timeseries`. `relative` centers `kind="timeseries"` or
+        `kind="hist"` on their own mean instead of showing the absolute
+        value — see `plot_timeseries`/`plot_histogram`. `label` stamps a
+        large bold scenario label across the top of the figure — see any
+        of the underlying plotting functions. `tick_direction` overrides
+        the x-axis tick direction (``"in"``/``"out"``/``"inout"``) for
+        this plot, falling back to the global default
+        (``style.TICK_DIRECTION``) when omitted.
 
     Returns
     -------
@@ -1030,6 +1281,8 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
     >>> plot(df, kind="adev", quantity="power")
     >>> plot(df, kind="psd", scaling="asd", save="figs/asd")
     >>> plot(df, kind="adev", regions=True)  # short/mid/long-term summary
+    >>> plot(df, kind="adev", print_regions=True)  # print the region summary instead of drawing it
+    >>> plot(df, kind="timeseries", show_power=False)  # frequency only, no power axis
     >>> plot(df, kind="hist", quantity="wavelength", bins=100)
     >>> plot(df, kind="adev", quantity="power", label="Scenario A", save="fig/adev_A")
     """
@@ -1055,8 +1308,18 @@ def plot(data, kind="overview", *, quantity="frequency", save=None, cleanup=Fals
         taus = kwargs.pop("taus", "all")
         unit = kwargs.pop("unit", defaults["unit"])
         title = kwargs.pop("title", defaults["title"])
-        tau, dev, dev_err, _ = compute_oadev(df[defaults["column"]], time_s=df["time_s"], taus=taus)
-        plot_adev(tau, dev, dev_err, unit=unit, quantity=quantity, title=title, save=save_path, **kwargs)
+        ci = kwargs.pop("ci", None)
+        if ci is not None:
+            tau, dev, dev_err, _n, ci_bounds = compute_oadev(
+                df[defaults["column"]], time_s=df["time_s"], taus=taus, ci=ci
+            )
+            plot_adev(
+                tau, dev, dev_err, unit=unit, quantity=quantity, title=title,
+                save=save_path, ci_bounds=ci_bounds, **kwargs,
+            )
+        else:
+            tau, dev, dev_err, _ = compute_oadev(df[defaults["column"]], time_s=df["time_s"], taus=taus)
+            plot_adev(tau, dev, dev_err, unit=unit, quantity=quantity, title=title, save=save_path, **kwargs)
     elif kind == "spectrum":
         if quantity not in _SPECTRUM_QUANTITY_COLUMNS:
             raise ValueError(f"Unknown quantity {quantity!r}; expected 'frequency' or 'power'")
