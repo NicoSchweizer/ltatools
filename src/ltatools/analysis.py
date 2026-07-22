@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import warnings
 
 import numpy as np
@@ -9,6 +11,17 @@ import pandas as pd
 import allantools as at
 from scipy.signal import welch
 from scipy.stats import chi2
+
+# Greenhall confidence intervals need allantools' ``ci`` submodule. Its API has
+# moved between releases, so probe (never raise) at import time; ``compute_oadev``
+# raises a clear ImportError only when ``ci`` is actually requested.
+try:
+    _HAS_GREENHALL_CI = all(
+        hasattr(at.ci, _name)
+        for _name in ("edf_greenhall", "confidence_interval", "autocorr_noise_id")
+    )
+except AttributeError:
+    _HAS_GREENHALL_CI = False
 
 
 def _estimate_rate(time_s):
@@ -21,7 +34,142 @@ def _estimate_rate(time_s):
     return 1.0 / np.median(dt)
 
 
-def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all"):
+def _greenhall_ci(data, tau, dev, *, rate, data_type, ci, d=2, overlapping=True):
+    """Per-tau Greenhall confidence interval for an (O)ADEV estimate.
+
+    Returns ``(ci_lo, ci_hi, diag)``. ``ci_lo``/``ci_hi`` are **absolute
+    deviation values** (same native unit as ``dev``), not half-widths. Points
+    for which no interval can be computed are NaN in both bounds and flagged in
+    ``diag["skipped"]``.
+
+    ``d=2`` selects ADEV (``d=3`` would be Hadamard). ``modified=False`` because
+    ``compute_oadev`` computes ``oadev`` (overlapping), not ``omdev``.
+
+    Parameters
+    ----------
+    data, tau, dev : array_like
+        The series and the per-tau ADEV result from ``at.oadev``.
+    rate : float
+        Sampling rate in Hz (used to recover the averaging factor
+        ``af = round(tau_i * rate)``).
+    data_type : str
+        ``"freq"`` or ``"phase"``; forwarded to ``autocorr_noise_id``.
+    ci : float
+        Two-sided coverage, e.g. ``0.6826894921370859`` for 1 sigma.
+    d : int, default 2
+        Difference order for ``edf_greenhall`` (2 = ADEV).
+    overlapping : bool, default True
+        Must be True — ``compute_oadev`` uses the overlapping estimator.
+    """
+    # Phase-0 pairing requirement: compute_oadev uses at.oadev (overlapping),
+    # so the Greenhall EDF must be computed with overlapping=True.
+    assert overlapping, "Greenhall EDF must use overlapping=True to match at.oadev"
+
+    data = np.asarray(data, dtype=float)
+    tau = np.asarray(tau, dtype=float)
+    dev = np.asarray(dev, dtype=float)
+    N = len(data)
+    n = len(tau)
+
+    ci_lo = np.full(n, np.nan)
+    ci_hi = np.full(n, np.nan)
+    edf_arr = np.full(n, np.nan)
+    alpha_used = np.full(n, np.nan)
+    alpha_raw = np.full(n, np.nan)
+    clamped = np.zeros(n, dtype=bool)
+    skipped = np.zeros(n, dtype=bool)
+
+    last_alpha = None
+    # allantools' ci functions print to stdout on the short-series case; keep
+    # that chatter out of the caller's stdout (notebooks, capsys) — the
+    # summarising warnings.warn below still reports what happened.
+    with open(os.devnull, "w") as _devnull, contextlib.redirect_stdout(_devnull):
+        for i in range(n):
+            af = int(round(tau[i] * rate))
+            if af < 1:
+                af = 1
+
+            # Guard C (part 1): too few independent estimates -> skip.
+            if N - 2 * af < 8:
+                skipped[i] = True
+                continue
+
+            # Step 1 + Guard A: noise identification on the decimated series.
+            try:
+                alpha_int, _alpha_f, _d_est, _rho = at.ci.autocorr_noise_id(
+                    data, af, data_type=data_type, dmin=0, dmax=2
+                )
+                alpha_i = int(alpha_int)
+                alpha_raw[i] = alpha_i
+                last_alpha = alpha_i
+            except NotImplementedError:
+                # Fallback: reuse the last successfully identified alpha (noise
+                # type is usually stable across neighbouring tau); only assume
+                # white FM (0) if none exists. Record alpha_raw as NaN to show
+                # it was imputed.
+                alpha_i = last_alpha if last_alpha is not None else 0
+                alpha_raw[i] = np.nan
+
+            # Guard B: clamp alpha into [-2, 2].
+            alpha_c = min(2, max(-2, alpha_i))
+            if alpha_c != alpha_i:
+                clamped[i] = True
+            alpha_used[i] = alpha_c
+
+            # Step 5: EDF. edf_greenhall can still raise at the clamp boundary
+            # for exotic cases -> treat as a skip rather than propagate.
+            try:
+                edf = at.ci.edf_greenhall(
+                    alpha=alpha_c, d=d, m=af, N=N,
+                    overlapping=overlapping, modified=False,
+                )
+            except (AssertionError, NotImplementedError):
+                skipped[i] = True
+                continue
+
+            # Guard C (part 2): degenerate EDF -> skip.
+            if not np.isfinite(edf) or edf < 1:
+                skipped[i] = True
+                continue
+
+            edf_arr[i] = edf
+            lo, hi = at.ci.confidence_interval(dev=float(dev[i]), edf=edf, ci=ci)
+            ci_lo[i] = lo
+            ci_hi[i] = hi
+
+    # One summarising warning per call (not one per tau).
+    n_clamped = int(np.sum(clamped))
+    n_skipped = int(np.sum(skipped))
+    if n_clamped or n_skipped:
+        warnings.warn(
+            f"Greenhall CI: {n_clamped} tau point(s) had the noise-type exponent "
+            f"clamped into [-2, 2]; {n_skipped} point(s) were skipped "
+            "(no interval computable; ci_lo/ci_hi are NaN there).",
+            stacklevel=2,
+        )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        n_eff_octaves = (
+            float(np.log2(np.max(tau) / np.min(tau)))
+            if n > 1 and np.min(tau) > 0
+            else 0.0
+        )
+
+    diag = {
+        "edf": edf_arr,
+        "alpha": alpha_used,
+        "alpha_raw": alpha_raw,
+        "clamped": clamped,
+        "skipped": skipped,
+        "n_eff_octaves": n_eff_octaves,
+    }
+    return ci_lo, ci_hi, diag
+
+
+def compute_oadev(
+    data, *, rate=None, time_s=None, data_type="freq", taus="all",
+    ci=None, ci_diagnostics=False,
+):
     """Compute the overlap Allan deviation (OADEV) of a data series.
 
     Parameters
@@ -34,9 +182,24 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all")
         Timestamps in seconds, used to estimate `rate` when it is not given.
         The rate is ``1 / median(positive time differences)``.
     data_type : str, default "freq"
-        Passed through to ``allantools.oadev``.
+        Passed through to ``allantools.oadev`` (and to the noise-type
+        identification when `ci` is requested).
     taus : str or array_like, default "all"
         Averaging times, passed through to ``allantools.oadev``.
+    ci : float, optional
+        If given (e.g. ``0.6826894921370859`` for 1 sigma), also compute a
+        per-tau Greenhall confidence interval and return it as one extra
+        element. ``None`` (the default) leaves the return value a 4-tuple,
+        unchanged. The interval uses the Greenhall equivalent-degrees-of-freedom
+        with the noise type identified per tau via lag-1 autocorrelation
+        (``d=2``, ``overlapping=True``). Two guards keep it robust: the
+        noise-type exponent is clamped into ``[-2, 2]``, and points with too few
+        independent estimates (short decimated series) are skipped with NaN
+        bounds. Requires allantools' ``ci`` submodule; a clear ``ImportError`` is
+        raised only if it is missing and `ci` is requested.
+    ci_diagnostics : bool, default False
+        Only meaningful together with `ci`. If True, also return a diagnostics
+        dict (see Returns) for the thesis methods section and debugging.
 
     Returns
     -------
@@ -45,17 +208,27 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all")
     dev : numpy.ndarray
         Overlap Allan deviation values.
     dev_err : numpy.ndarray
-        Error of `dev`, as returned directly by ``allantools.oadev``
-        (``dev / sqrt(n)``). This is the only error estimate this function
-        provides; it does not account for the actual noise type or the
-        correlation introduced by overlapping samples.
+        Naive error of `dev`, as returned directly by ``allantools.oadev``
+        (``dev / sqrt(n)``). It does not account for the actual noise type or
+        the correlation introduced by overlapping samples; use `ci` for a
+        noise-aware interval.
     n : numpy.ndarray
         Number of pairs used at each `tau`.
+    (ci_lo, ci_hi) : tuple of numpy.ndarray, only if `ci` is given
+        Absolute lower/upper deviation bounds (same native unit as `dev`), NaN
+        where no interval could be computed.
+    diag : dict, only if `ci` is given and `ci_diagnostics` is True
+        Keys ``"edf"``, ``"alpha"`` (clamped integer exponent used),
+        ``"alpha_raw"`` (raw ``autocorr_noise_id`` output, NaN where imputed),
+        ``"clamped"`` (bool), ``"skipped"`` (bool), ``"n_eff_octaves"``
+        (``log2(tau_max/tau_min)``).
 
     Raises
     ------
     ValueError
         If neither `rate` nor `time_s` is given.
+    ImportError
+        If `ci` is requested but allantools' ``ci`` submodule is unavailable.
     """
     if rate is None:
         if time_s is None:
@@ -65,32 +238,74 @@ def compute_oadev(data, *, rate=None, time_s=None, data_type="freq", taus="all")
     data = np.asarray(data)
     tau, dev, dev_err, n = at.oadev(data, rate=rate, data_type=data_type, taus=taus)
 
-    return tau, dev, dev_err, n
+    if ci is None:
+        return tau, dev, dev_err, n
+
+    if not _HAS_GREENHALL_CI:
+        raise ImportError(
+            "Greenhall confidence intervals require allantools' 'ci' submodule "
+            "(edf_greenhall, confidence_interval, autocorr_noise_id), which the "
+            "installed allantools does not provide. Upgrade to allantools>=2024.6."
+        )
+
+    ci_lo, ci_hi, diag = _greenhall_ci(
+        data, tau, dev, rate=rate, data_type=data_type, ci=ci, d=2, overlapping=True,
+    )
+    if ci_diagnostics:
+        return tau, dev, dev_err, n, (ci_lo, ci_hi), diag
+    return tau, dev, dev_err, n, (ci_lo, ci_hi)
 
 
 DEFAULT_ADEV_REGION_BOUNDARIES = (0.25, 2.0)
 
 
-def summarize_adev_regions(tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOUNDARIES, agg="mean"):
+def summarize_adev_regions(
+    tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOUNDARIES, agg="mean",
+    *, ci_bounds=None, error_model=None,
+):
     """Aggregate Allan deviation values into τ regions (e.g. short/mid/long term).
 
     Splits `tau` into ``len(boundaries) + 1`` half-open regions
     ``[0, b_0), [b_0, b_1), ..., [b_n, inf)`` and reduces the `dev` values
     falling into each region to a single value plus an error estimate.
 
-    The error is computed by propagating the individual `dev_err` values
-    of a region through quadrature, ``sqrt(sum(dev_err_i**2)) / n``,
-    rather than the sample standard deviation of the `dev` values in the
-    region. The Allan deviation typically has a real trend across a
-    region (e.g. it falls as ``tau**-0.5`` for white frequency noise), so
-    the spread of `dev` values there partly reflects that trend, not
-    measurement uncertainty — using it as an error bar would overstate
-    the true uncertainty. Propagating the already-computed per-tau
-    `dev_err` avoids that conflation. This propagated value is used as
-    the error estimate for both ``agg="mean"`` and ``agg="median"``; for
-    the median it is an approximation (the formally correct median error
-    would require e.g. a bootstrap estimate), but is used here for
-    simplicity.
+    Legacy error (``error`` key)
+    ----------------------------
+    The legacy `error` propagates the individual `dev_err` values of a region
+    through quadrature, ``sqrt(sum(dev_err_i**2)) / n``. This **understates** the
+    true uncertainty: overlapping ADEV points at neighbouring τ are nearly
+    perfectly correlated, so their errors do not average down as ``1/sqrt(n)``.
+    It is retained unchanged for backward compatibility and is still populated
+    even when `ci_bounds` is supplied. For a corrected estimate pass
+    `ci_bounds` (see below) with ``error_model="correlated"``.
+
+    The still-valid reason the raw **spread** of `dev` across a region is *not*
+    used as an error bar: the Allan deviation typically has a real trend across a
+    region (e.g. it falls as ``tau**-0.5`` for white FM), so that spread partly
+    reflects the trend, not measurement uncertainty. This propagated/aggregated
+    error avoids that conflation, for both ``agg="mean"`` and ``agg="median"``
+    (for the median it is an approximation).
+
+    Greenhall error (``error_lo``/``error_hi`` keys, opt-in via `ci_bounds`)
+    -----------------------------------------------------------------------
+    When `ci_bounds=(ci_lo, ci_hi)` is given, each region dict additionally gets
+    asymmetric `error_lo`/`error_hi`, `n_ci`, `dev_min`, `dev_max`. Per point the
+    absolute bounds are converted to half-widths ``half_lo = dev - ci_lo`` and
+    ``half_hi = ci_hi - dev`` (clipped at 0) *before* aggregating. With
+    ``error_model="correlated"`` (the default when `ci_bounds` is given) the
+    standard deviation of the region mean is taken as the *mean of the individual
+    half-widths* — no ``1/sqrt(n)`` — because overlapping estimators are
+    correlated. ``error_model="independent"`` instead divides by
+    ``sqrt(n_eff)`` with ``n_eff = log2(tau_max/tau_min)`` (octaves spanned, not
+    the point count). NaN bounds (skipped points, clustering at large τ) are
+    excluded via ``nanmean``; `n_ci` counts the finite points separately from
+    `n`, and if `n_ci == 0` the region's `error_lo`/`error_hi` are NaN (never a
+    silent fall-back to the quadrature error). `value` is never recomputed over
+    the reduced point set, so the headline number stays comparable.
+
+    Caveat: a Greenhall interval describes a single-τ ADEV estimator. The mean
+    over a region is a derived quantity, so its interval is a plausibility band
+    rather than a rigorous CI.
 
     Parameters
     ----------
@@ -98,29 +313,36 @@ def summarize_adev_regions(tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOU
         Averaging times in seconds (e.g. from `compute_oadev`).
     dev : array_like
         Allan deviation values, same length as `tau`.
-    dev_err : array_like
-        Per-tau error of `dev` (e.g. `compute_oadev`'s `dev_err`), same
-        length as `tau`. Used for the error propagation described above.
+    dev_err : array_like or None
+        Per-tau naive error of `dev` (e.g. `compute_oadev`'s `dev_err`), same
+        length as `tau`, used for the legacy quadrature `error`. If None, the
+        legacy `error` is NaN (only sensible together with `ci_bounds`).
     boundaries : sequence of float, default (0.25, 2.0)
         τ boundaries in seconds (need not be pre-sorted). ``k`` boundaries
         produce ``k + 1`` regions.
     agg : {"mean", "median"}, default "mean"
         Aggregation statistic applied to `dev` within each region.
+    ci_bounds : tuple of array_like, optional
+        ``(ci_lo, ci_hi)`` absolute deviation bounds (same unit/length as `dev`,
+        e.g. from ``compute_oadev(..., ci=...)``). Enables the additive Greenhall
+        keys. NaN entries are treated as skipped points.
+    error_model : {"correlated", "independent"}, optional
+        Only used when `ci_bounds` is given; defaults to ``"correlated"``.
+        Ignored (not validated) otherwise.
 
     Returns
     -------
     list of dict
-        One dict per non-empty region, in ascending τ order, with keys
-        ``tau_min``, ``tau_max`` (floats in seconds; ``tau_max`` is
-        ``inf`` for the last region), ``value`` (the aggregated `dev`),
-        ``error`` (the propagated error of `value`), and ``n`` (number of
-        points in the region). Regions with no points are omitted.
+        One dict per non-empty region, ascending τ order. Always contains
+        ``tau_min``, ``tau_max`` (``inf`` for the last region), ``value``,
+        ``error``, ``n``. When `ci_bounds` is given, each dict additionally
+        contains ``error_lo``, ``error_hi``, ``n_ci``, ``dev_min``, ``dev_max``.
 
     Raises
     ------
     ValueError
-        If `agg` is not ``"mean"``/``"median"``, or if any `boundaries`
-        entry is not positive.
+        If `agg` is not ``"mean"``/``"median"``, if any `boundaries` entry is not
+        positive, or if `error_model` (when `ci_bounds` is given) is unknown.
 
     Examples
     --------
@@ -133,7 +355,21 @@ def summarize_adev_regions(tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOU
 
     tau = np.asarray(tau)
     dev = np.asarray(dev)
-    dev_err = np.asarray(dev_err)
+    dev_err = None if dev_err is None else np.asarray(dev_err)
+
+    if ci_bounds is not None:
+        ci_lo = np.asarray(ci_bounds[0], dtype=float)
+        ci_hi = np.asarray(ci_bounds[1], dtype=float)
+        # Pitfall 1: convert absolute sigma bounds to half-widths *before*
+        # aggregating; clip at 0 to absorb floating-point noise.
+        half_lo = np.clip(dev - ci_lo, 0, None)
+        half_hi = np.clip(ci_hi - dev, 0, None)
+        if error_model is None:
+            error_model = "correlated"
+        if error_model not in ("correlated", "independent"):
+            raise ValueError(
+                f"Unknown error_model {error_model!r}; expected 'correlated' or 'independent'"
+            )
 
     boundaries = sorted(boundaries)
     if any(b <= 0 for b in boundaries):
@@ -143,14 +379,62 @@ def summarize_adev_regions(tau, dev, dev_err, boundaries=DEFAULT_ADEV_REGION_BOU
     agg_func = np.mean if agg == "mean" else np.median
 
     regions = []
+    empty_ci_regions = 0
     for lo, hi in zip(edges[:-1], edges[1:]):
         mask = (tau >= lo) & (tau < hi)
         n = int(np.sum(mask))
         if n == 0:
             continue
         value = float(agg_func(dev[mask]))
-        error = float(np.sqrt(np.sum(dev_err[mask] ** 2)) / n)
-        regions.append({"tau_min": lo, "tau_max": hi, "value": value, "error": error, "n": n})
+        if dev_err is not None:
+            error = float(np.sqrt(np.sum(dev_err[mask] ** 2)) / n)
+        else:
+            error = float("nan")
+        region = {"tau_min": lo, "tau_max": hi, "value": value, "error": error, "n": n}
+
+        if ci_bounds is not None:
+            hlo = half_lo[mask]
+            hhi = half_hi[mask]
+            finite = np.isfinite(hlo) & np.isfinite(hhi)
+            n_ci = int(np.sum(finite))
+            if n_ci == 0:
+                error_lo = float("nan")
+                error_hi = float("nan")
+                empty_ci_regions += 1
+            else:
+                # Pitfall 2: overlapping ADEV points are ~fully correlated, so
+                # the SD of their mean is the mean of the SDs (no 1/sqrt(n)).
+                mean_lo = float(np.nanmean(hlo))
+                mean_hi = float(np.nanmean(hhi))
+                if error_model == "correlated":
+                    error_lo = mean_lo
+                    error_hi = mean_hi
+                else:  # "independent"
+                    tau_region = tau[mask].astype(float)
+                    pos = tau_region[tau_region > 0]
+                    if pos.size >= 2:
+                        n_eff = float(np.log2(np.max(pos) / np.min(pos)))
+                    else:
+                        n_eff = 1.0
+                    n_eff = max(n_eff, 1.0)
+                    error_lo = mean_lo / np.sqrt(n_eff)
+                    error_hi = mean_hi / np.sqrt(n_eff)
+            region["error_lo"] = error_lo
+            region["error_hi"] = error_hi
+            region["n_ci"] = n_ci
+            # Free bonus: actual span of dev across the region (no assumptions).
+            region["dev_min"] = float(np.min(dev[mask]))
+            region["dev_max"] = float(np.max(dev[mask]))
+
+        regions.append(region)
+
+    if ci_bounds is not None and empty_ci_regions:
+        warnings.warn(
+            f"Greenhall CI region error: {empty_ci_regions} region(s) had no finite "
+            "CI bounds (all points skipped); their error_lo/error_hi are NaN while "
+            "value/error stay from the full point set.",
+            stacklevel=2,
+        )
 
     return regions
 
